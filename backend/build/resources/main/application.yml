@@ -1,0 +1,63 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ubos-platform
+
+  # R2DBC 响应式数据库配置
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/ubos_db
+    username: postgres
+    password: root # 请修改为您的实际密码
+    pool:
+      initial-size: 5
+      max-size: 20
+
+  # Flyway 迁移配置 (使用 JDBC 驱动，仅用于启动时建表)
+  flyway:
+    enabled: true
+    url: jdbc:postgresql://localhost:5432/ubos_db
+    user: postgres
+    password: root
+    locations: "classpath:db/migration"
+
+# 日志级别
+logging:
+  level:
+    # UBOS 内部逻辑跟踪 (方便查看我们自己写的 log.info/debug)
+    com.ubos: DEBUG
+
+    # --- 核心 SQL 跟踪 (查询语句和参数) ---
+
+    # 1. R2DBC 框架层面的数据绑定和语句执行
+    org.springframework.r2dbc: DEBUG
+    org.springframework.r2dbc.core: DEBUG
+
+    # 2. R2DBC 驱动层 (查看真正的网络交互和 SQL 语句)
+    io.r2dbc.spi.Connection: DEBUG
+    io.r2dbc.postgresql: DEBUG
+
+    # 3. 事务和连接池 (可选，但有助于调试启动问题)
+    io.r2dbc.pool: INFO
+
+    # 4. Spring 容器/配置 (保持 INFO 或 DEBUG)
+    org.springframework.beans.factory: INFO
+
+management:
+  endpoint:
+    shutdown:
+      enabled: true # 允许远程关机
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+
+ubos:
+  genesis:
+    # 策略选项:
+    #   SAFE   - (生产默认) 安全模式：检查是否已初始化，如果已存在则跳过。
+    #   RESET  - (开发专用) 暴力模式：启动时清空所有数据，重新创世。
+    #   UPDATE - (进阶模式) 增量模式：只补充缺失的数据，不删除旧数据。
+    strategy: RESET

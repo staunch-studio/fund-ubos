@@ -1,0 +1,14 @@
+spring:
+  main:
+    web-application-type: none  # Disable web server for CLI mode
+    banner-mode: off
+  shell:
+    interactive:
+      enabled: true
+    script:
+      enabled: true
+
+logging:
+  level:
+    root: WARN
+    org.logrum.ubos.console: INFO

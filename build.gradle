@@ -1,0 +1,58 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.4.1'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+allprojects {
+    group = 'org.logrum.ubos'
+    version = '0.1.0-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'org.springframework.boot'
+    apply plugin: 'io.spring.dependency-management'
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+
+    dependencies {
+        // 【核心修复】强制指定 Lombok 版本，解决 JDK 兼容性崩溃
+        compileOnly 'org.projectlombok:lombok:1.18.34'
+        annotationProcessor 'org.projectlombok:lombok:1.18.34'
+
+        // 其他通用依赖
+        implementation 'com.fasterxml.jackson.core:jackson-databind'
+        implementation 'io.projectreactor:reactor-core'
+
+        testImplementation 'org.springframework.boot:spring-boot-starter-test'
+        testImplementation 'io.projectreactor:reactor-test'
+    }
+}
+
+project(':backend') {
+    dependencies {
+        // Logging (explicit dependency to ensure SLF4J is available)
+        implementation 'org.springframework.boot:spring-boot-starter-logging'
+        
+        // Kernel
+        implementation 'org.springframework.boot:spring-boot-starter-data-r2dbc'
+        runtimeOnly 'org.postgresql:r2dbc-postgresql:1.0.7.RELEASE'
+
+        // Engine
+        implementation 'org.springframework.boot:spring-boot-starter'
+        implementation 'org.apache.groovy:groovy:4.0.15'
+        implementation 'org.apache.groovy:groovy-json:4.0.15'
+        implementation 'org.apache.groovy:groovy-templates:4.0.15'
+
+        // Server
+        implementation 'org.springframework.boot:spring-boot-starter-webflux'
+        implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    }
+}
