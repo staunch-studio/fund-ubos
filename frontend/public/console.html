@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UBOS Web Console</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #0d1117;
+            color: #00ff00;
+            font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1a1f29 0%, #0d1117 100%);
+            border-bottom: 1px solid #30363d;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-title {
+            color: #58a6ff;
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .header-subtitle {
+            color: #8b949e;
+            font-size: 12px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #8b949e;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #238636;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.error {
+            background-color: #f85149;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Terminal Container */
+        .terminal-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+            scroll-behavior: smooth;
+        }
+
+        .terminal-output {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .command-line {
+            margin-bottom: 8px;
+        }
+
+        .prompt {
+            color: #58a6ff;
+            user-select: none;
+        }
+
+        .command-text {
+            color: #f0f6fc;
+        }
+
+        .output-block {
+            margin-bottom: 16px;
+            padding-left: 0;
+        }
+
+        /* Input Area */
+        .input-container {
+            background-color: #161b22;
+            border-top: 1px solid #30363d;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .input-prompt {
+            color: #58a6ff;
+            font-weight: bold;
+            user-select: none;
+        }
+
+        .command-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #f0f6fc;
+            font-family: inherit;
+            font-size: inherit;
+            caret-color: #58a6ff;
+        }
+
+        .command-input::placeholder {
+            color: #484f58;
+        }
+
+        /* Loading indicator */
+        .loading {
+            color: #8b949e;
+            display: inline-block;
+        }
+
+        .loading::after {
+            content: '';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+
+        /* Welcome message */
+        .welcome {
+            color: #58a6ff;
+            margin-bottom: 20px;
+        }
+
+        .welcome-box {
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 16px;
+            margin-bottom: 16px;
+            background-color: #161b22;
+        }
+
+        /* Scrollbar */
+        .terminal-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-container::-webkit-scrollbar-track {
+            background: #0d1117;
+        }
+
+        .terminal-container::-webkit-scrollbar-thumb {
+            background-color: #30363d;
+            border-radius: 4px;
+        }
+
+        .terminal-container::-webkit-scrollbar-thumb:hover {
+            background-color: #484f58;
+        }
+
+        /* History navigation hint */
+        .hint {
+            color: #484f58;
+            font-size: 12px;
+            padding: 4px 20px;
+            background-color: #161b22;
+            border-top: 1px solid #21262d;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <div class="header-title">🖥️ UBOS Web Console</div>
+            <div class="header-subtitle">Universal Business OS - Git for Data</div>
+        </div>
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Connected</span>
+        </div>
+    </div>
+
+    <!-- Terminal Output -->
+    <div class="terminal-container" id="terminalContainer">
+        <div class="terminal-output" id="terminalOutput">
+            <div class="welcome-box">
+                <pre style="color: #58a6ff;">
+╔═══════════════════════════════════════════════════════════════════════╗
+║                      UBOS Web Console v1.0.0                          ║
+║                Universal Business OS - Git for Data                   ║
+╚═══════════════════════════════════════════════════════════════════════╝
+                </pre>
+                <div style="color: #8b949e; margin-top: 8px;">
+                    Type <span style="color: #ffa657;">help</span> to see available commands, or start typing to interact with the kernel.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hint bar -->
+    <div class="hint">
+        💡 Press <strong>↑/↓</strong> to navigate command history | <strong>Tab</strong> to autocomplete | <strong>Ctrl+L</strong> to clear
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-container">
+        <span class="input-prompt">ubos:~$</span>
+        <input 
+            type="text" 
+            class="command-input" 
+            id="commandInput" 
+            placeholder="Enter command..." 
+            autocomplete="off"
+            autofocus
+        >
+    </div>
+
+    <script>
+        // Configuration
+        const API_URL = '/api/console/exec';
+        
+        // State
+        let commandHistory = [];
+        let historyIndex = -1;
+        let isProcessing = false;
+
+        // DOM Elements
+        const terminalOutput = document.getElementById('terminalOutput');
+        const terminalContainer = document.getElementById('terminalContainer');
+        const commandInput = document.getElementById('commandInput');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+
+        // ANSI Color Code Parser
+        const ANSI_COLORS = {
+            '0': '',           // Reset
+            '1': 'font-weight: bold;',  // Bold
+            '30': 'color: #484f58;',    // Black
+            '31': 'color: #f85149;',    // Red
+            '32': 'color: #3fb950;',    // Green
+            '33': 'color: #d29922;',    // Yellow
+            '34': 'color: #58a6ff;',    // Blue
+            '35': 'color: #bc8cff;',    // Magenta
+            '36': 'color: #39c5cf;',    // Cyan
+            '37': 'color: #f0f6fc;',    // White
+            '90': 'color: #6e7681;',    // Bright Black
+            '91': 'color: #ff7b72;',    // Bright Red
+            '92': 'color: #56d364;',    // Bright Green
+            '93': 'color: #e3b341;',    // Bright Yellow
+            '94': 'color: #79c0ff;',    // Bright Blue
+            '95': 'color: #d2a8ff;',    // Bright Magenta
+            '96': 'color: #56d4dd;',    // Bright Cyan
+            '97': 'color: #ffffff;',    // Bright White
+        };
+
+        /**
+         * Parses ANSI escape codes and converts them to HTML spans with styles.
+         */
+        function parseAnsiToHtml(text) {
+            if (!text) return '';
+            
+            // Handle clear screen command
+            if (text.includes('\u001B[2J') || text.includes('\x1B[2J')) {
+                clearTerminal();
+                return '';
+            }
+
+            // Escape HTML
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Parse ANSI codes
+            // Match patterns like \u001B[32m or \x1B[32m or \033[32m
+            const ansiPattern = /\u001B\[([0-9;]+)m|\x1B\[([0-9;]+)m/g;
+            
+            let result = '';
+            let lastIndex = 0;
+            let currentStyles = [];
+            let match;
+
+            while ((match = ansiPattern.exec(html)) !== null) {
+                // Add text before this match
+                result += html.substring(lastIndex, match.index);
+                
+                const codes = (match[1] || match[2]).split(';');
+                
+                for (const code of codes) {
+                    if (code === '0') {
+                        // Reset - close all open spans
+                        result += '</span>'.repeat(currentStyles.length);
+                        currentStyles = [];
+                    } else if (ANSI_COLORS[code]) {
+                        // Open new span with style
+                        result += `<span style="${ANSI_COLORS[code]}">`;
+                        currentStyles.push(code);
+                    }
+                }
+                
+                lastIndex = match.index + match[0].length;
+            }
+
+            // Add remaining text
+            result += html.substring(lastIndex);
+            
+            // Close any remaining open spans
+            result += '</span>'.repeat(currentStyles.length);
+
+            return result;
+        }
+
+        /**
+         * Appends output to the terminal.
+         */
+        function appendOutput(content, isCommand = false, command = '') {
+            const outputBlock = document.createElement('div');
+            outputBlock.className = 'output-block';
+
+            if (isCommand) {
+                const commandLine = document.createElement('div');
+                commandLine.className = 'command-line';
+                commandLine.innerHTML = `<span class="prompt">ubos:~$ </span><span class="command-text">${escapeHtml(command)}</span>`;
+                outputBlock.appendChild(commandLine);
+            }
+
+            if (content) {
+                const outputContent = document.createElement('div');
+                outputContent.innerHTML = parseAnsiToHtml(content);
+                outputBlock.appendChild(outputContent);
+            }
+
+            terminalOutput.appendChild(outputBlock);
+            scrollToBottom();
+        }
+
+        /**
+         * Shows loading indicator.
+         */
+        function showLoading() {
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'loadingIndicator';
+            loadingDiv.className = 'loading';
+            loadingDiv.textContent = 'Processing';
+            terminalOutput.appendChild(loadingDiv);
+            scrollToBottom();
+        }
+
+        /**
+         * Removes loading indicator.
+         */
+        function hideLoading() {
+            const loadingDiv = document.getElementById('loadingIndicator');
+            if (loadingDiv) {
+                loadingDiv.remove();
+            }
+        }
+
+        /**
+         * Scrolls terminal to bottom.
+         */
+        function scrollToBottom() {
+            terminalContainer.scrollTop = terminalContainer.scrollHeight;
+        }
+
+        /**
+         * Escapes HTML special characters.
+         */
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        /**
+         * Clears the terminal output.
+         */
+        function clearTerminal() {
+            terminalOutput.innerHTML = '';
+        }
+
+        /**
+         * Updates connection status indicator.
+         */
+        function setStatus(connected, message) {
+            statusDot.className = connected ? 'status-dot' : 'status-dot error';
+            statusText.textContent = message;
+        }
+
+        /**
+         * Sends command to the backend API.
+         */
+        async function executeCommand(command) {
+            if (!command.trim()) return;
+
+            // Handle local commands
+            if (command.trim().toLowerCase() === 'clear') {
+                clearTerminal();
+                return;
+            }
+
+            // Add to history
+            commandHistory.push(command);
+            historyIndex = commandHistory.length;
+
+            // Show command in terminal
+            appendOutput(null, true, command);
+
+            // Show loading
+            isProcessing = true;
+            showLoading();
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ command: command }),
+                });
+
+                hideLoading();
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                setStatus(true, 'Connected');
+
+                // Handle clear command from server
+                if (data.output && (data.output.includes('\u001B[2J') || data.output.includes('\x1B[2J'))) {
+                    clearTerminal();
+                } else {
+                    appendOutput(data.output);
+                }
+
+            } catch (error) {
+                hideLoading();
+                setStatus(false, 'Disconnected');
+                
+                const errorMsg = `\u001B[31m❌ Connection error: ${error.message}\n` +
+                    `\u001B[33m   Make sure the backend is running at ${window.location.origin}\u001B[0m`;
+                appendOutput(errorMsg);
+            } finally {
+                isProcessing = false;
+            }
+        }
+
+        /**
+         * Handles keyboard input.
+         */
+        function handleKeyDown(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (!isProcessing) {
+                    const command = commandInput.value;
+                    commandInput.value = '';
+                    executeCommand(command);
+                }
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    commandInput.value = commandHistory[historyIndex] || '';
+                }
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    commandInput.value = commandHistory[historyIndex] || '';
+                } else {
+                    historyIndex = commandHistory.length;
+                    commandInput.value = '';
+                }
+            } else if (event.key === 'l' && event.ctrlKey) {
+                event.preventDefault();
+                clearTerminal();
+            } else if (event.key === 'Tab') {
+                event.preventDefault();
+                // Simple autocomplete for common commands
+                const commands = ['help', 'commit', 'show', 'cat', 'checkout', 'exists', 'search', 'clear', 'version'];
+                const input = commandInput.value.toLowerCase();
+                const match = commands.find(cmd => cmd.startsWith(input));
+                if (match && input.length > 0) {
+                    commandInput.value = match;
+                }
+            }
+        }
+
+        // Event Listeners
+        commandInput.addEventListener('keydown', handleKeyDown);
+
+        // Focus input when clicking anywhere in terminal
+        terminalContainer.addEventListener('click', () => {
+            commandInput.focus();
+        });
+
+        // Initial focus
+        commandInput.focus();
+
+        // Check backend connection on load
+        (async function checkConnection() {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: 'version' }),
+                });
+                if (response.ok) {
+                    setStatus(true, 'Connected');
+                } else {
+                    setStatus(false, 'Disconnected');
+                }
+            } catch {
+                setStatus(false, 'Disconnected');
+            }
+        })();
+    </script>
+</body>
+</html>
