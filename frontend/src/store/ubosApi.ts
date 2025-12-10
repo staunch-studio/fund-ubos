@@ -22,6 +22,8 @@ import type {
   Environment,
   SaveEnvironmentRequest,
   SaveEnvironmentResponse,
+  SchemaCommitRequest,
+  SchemaCommitResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -36,7 +38,7 @@ export const ubosApi = createApi({
     baseUrl: '/api/console',
     // No Authorization headers - backend uses IP whitelisting
   }),
-  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process', 'Environment'],
+  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process', 'Environment', 'Schema'],
   endpoints: (builder) => ({
     // GET /entities
     getEntities: builder.query<EntityInstance[], GetEntitiesParams>({
@@ -269,6 +271,41 @@ export const ubosApi = createApi({
         return [{ type: 'Environment', id: 'LIST' }]
       },
     }),
+
+    // GET /snapshot?type=SCHEMA&slug={entityType}&branch={branch}
+    // Uses ResourceContextRequest to fetch schema as a snapshot entity
+    getSchema: builder.query<EntitySnapshot, ResourceContextRequest & { entityType: string }>({
+      query: (params) => ({
+        url: 'snapshot',
+        params: {
+          slug: params.entityType, // Schema slug is the entity type
+          type: 'SCHEMA',
+          branch: params.branch,
+        },
+      }),
+      providesTags: (_result, _error, arg) => [
+        { type: 'Schema', id: `${arg.entityType}-${arg.branch}` },
+      ],
+    }),
+
+    // POST /schema/commit
+    commitSchema: builder.mutation<SchemaCommitResponse, SchemaCommitRequest>({
+      query: (body) => ({
+        url: 'schema/commit',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error, arg) => {
+        if (error) {
+          return []
+        }
+        // Invalidate schema snapshot and entity list
+        return [
+          { type: 'Schema', id: `${arg.entityType}-${arg.branch}` },
+          { type: 'Entity', id: 'LIST' },
+        ]
+      },
+    }),
   }),
 })
 
@@ -288,5 +325,7 @@ export const {
   useGetProcessDetailQuery,
   useGetEnvironmentsQuery,
   useSaveEnvironmentMutation,
+  useGetSchemaQuery,
+  useCommitSchemaMutation,
 } = ubosApi
 

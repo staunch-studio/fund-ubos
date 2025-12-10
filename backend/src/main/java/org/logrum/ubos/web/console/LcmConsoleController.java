@@ -38,19 +38,22 @@ import reactor.core.publisher.Mono;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.logrum.ubos.kernel.util.JsonSchemaValidator;
+import org.logrum.ubos.kernel.util.SchemaValidationException;
+import org.logrum.ubos.web.console.dto.SchemaCommitRequest;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/console")
 @RequiredArgsConstructor
-public class LcmConsoleController
-{
+public class LcmConsoleController {
 
     private final LcmKernelService kernelService;
     private final LcmAuditService auditService;
     private final LcmEnvironmentService environmentService;
     private final LcmEntityRepository entityRepo;
     private final LcmVersionRepository versionRepo;
+    private final JsonSchemaValidator schemaValidator;
 
     /**
      * 1. 获取实体列表 前端 RTK Query: useGetEntitiesQuery
@@ -622,5 +625,157 @@ public class LcmConsoleController
             })
             .onErrorResume(IllegalArgumentException.class, e ->
                 Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage())));
+    }
+
+    // ==================== Schema Management Endpoints ====================
+
+    /**
+     * 20. Commit Schema Definition
+     * Purpose: Commit a new version of a JSON Schema definition.
+     * 
+     * <p>Schema entities are stored with:
+     * <ul>
+     *   <li>entityType = 'SCHEMA'</li>
+     *   <li>slug = the target entity type (e.g., 'LOGIC')</li>
+     * </ul>
+     * 
+     * Request Body: {
+     *   "targetType": "LOGIC",
+     *   "jsonSchemaContent": "{\"type\": \"object\", \"properties\": {...}}",
+     *   "author": "admin",
+     *   "message": "Added required fields validation"
+     * }
+     */
+    @PostMapping("/schema/commit")
+    public Mono<Map<String, Object>> commitSchema(@RequestBody SchemaCommitRequest request) {
+        if (request.targetType() == null || request.targetType().isBlank()) {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "targetType is required"));
+        }
+        if (request.jsonSchemaContent() == null || request.jsonSchemaContent().isBlank()) {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "jsonSchemaContent is required"));
+        }
+
+        // Validate that the schema content is valid JSON Schema
+        try {
+            com.networknt.schema.JsonSchemaFactory factory = 
+                com.networknt.schema.JsonSchemaFactory.getInstance(
+                    com.networknt.schema.SpecVersion.VersionFlag.V7);
+            factory.getSchema(request.jsonSchemaContent());
+        } catch (Exception e) {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Invalid JSON Schema: " + e.getMessage()));
+        }
+
+        log.info("📋 Schema commit request for type: {}", request.targetType());
+
+        return kernelService.commit(
+                "SCHEMA",
+                request.schemaSlug(),
+                request.resolvedBranch(),
+                request.jsonSchemaContent(),
+                request.resolvedAuthor(),
+                request.resolvedMessage()
+            )
+            .map(commitId -> {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("success", true);
+                response.put("message", String.format("Schema for '%s' committed successfully", request.targetType()));
+                response.put("commitId", commitId);
+                response.put("targetType", request.targetType());
+                response.put("branch", request.resolvedBranch());
+                return response;
+            })
+            .onErrorResume(SchemaValidationException.class, e ->
+                Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
+    }
+
+    /**
+     * 21. Get Schema Definition
+     * Purpose: Get the current JSON Schema definition for an entity type.
+     * 
+     * @param targetType the entity type to get schema for (e.g., "LOGIC")
+     * @param branch     optional branch (defaults to "master")
+     */
+    @GetMapping("/schema/{targetType}")
+    public Mono<Map<String, Object>> getSchema(
+            @PathVariable String targetType,
+            @RequestParam(defaultValue = "master") String branch) {
+
+        log.debug("📋 Fetching schema for type: {} on branch: {}", targetType, branch);
+
+        return kernelService.getResourceSnapshot("SCHEMA", targetType.toUpperCase(), branch)
+            .map(schemaContent -> {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("targetType", targetType.toUpperCase());
+                response.put("branch", branch);
+                response.put("schemaContent", schemaContent);
+                return response;
+            })
+            .switchIfEmpty(Mono.error(new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                String.format("No schema defined for entity type '%s' on branch '%s'", targetType, branch)
+            )));
+    }
+
+    /**
+     * 22. List All Schemas
+     * Purpose: Get a list of all defined schema entity types.
+     */
+    @GetMapping("/schemas")
+    public Flux<Map<String, Object>> listSchemas() {
+        log.debug("📋 Listing all schemas");
+
+        return entityRepo.findAll()
+            .filter(entity -> "SCHEMA".equalsIgnoreCase(entity.getEntityType()))
+            .flatMap(entity -> 
+                versionRepo.findHeadSnapshot(entity.getId(), "master")
+                    .map(version -> {
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("targetType", entity.getSlug());
+                        result.put("commitId", version.getCommitId());
+                        result.put("author", version.getAuthorId());
+                        result.put("message", version.getMessage());
+                        result.put("committedAt", version.getCommittedAt());
+                        return result;
+                    })
+            );
+    }
+
+    /**
+     * 23. Clear Schema Cache
+     * Purpose: Clear the schema validation cache (useful after schema updates).
+     * 
+     * @param targetType optional - if provided, only clear cache for this type
+     */
+    @PostMapping("/schema/cache/clear")
+    public Mono<Map<String, Object>> clearSchemaCache(
+            @RequestParam(required = false) String targetType) {
+
+        if (targetType != null && !targetType.isBlank()) {
+            schemaValidator.clearCache(targetType);
+            log.info("🗑️ Schema cache cleared for type: {}", targetType);
+            return Mono.just(Map.of(
+                "success", true,
+                "message", String.format("Schema cache cleared for '%s'", targetType)
+            ));
+        } else {
+            schemaValidator.clearCache();
+            log.info("🗑️ All schema caches cleared");
+            return Mono.just(Map.of(
+                "success", true,
+                "message", "All schema caches cleared"
+            ));
+        }
+    }
+
+    /**
+     * 24. Get Schema Cache Stats
+     * Purpose: Get statistics about the schema validation cache.
+     */
+    @GetMapping("/schema/cache/stats")
+    public Mono<Map<String, Object>> getSchemaCacheStats() {
+        return Mono.just(schemaValidator.getCacheStats());
     }
 }

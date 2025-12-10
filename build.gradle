@@ -51,7 +51,10 @@ project(':backend') {
         
         // PostgreSQL JDBC driver (required for Flyway migrations)
         runtimeOnly 'org.postgresql:postgresql'
-        
+
+        // JSON Schema Validation
+        implementation 'com.networknt:json-schema-validator:1.0.87'
+
         // Engine
         implementation 'org.springframework.boot:spring-boot-starter'
         implementation 'org.apache.groovy:groovy:4.0.15'

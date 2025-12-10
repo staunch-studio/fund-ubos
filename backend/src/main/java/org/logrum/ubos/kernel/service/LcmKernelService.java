@@ -4,26 +4,28 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.annotation.PostConstruct;
 import org.logrum.ubos.kernel.model.LcmEntityInstance;
 import org.logrum.ubos.kernel.model.LcmEntitySearchIndex;
 import org.logrum.ubos.kernel.model.LcmEntityVersionChain;
 import org.logrum.ubos.kernel.repository.LcmEntityRepository;
 import org.logrum.ubos.kernel.repository.LcmSearchIndexRepository;
 import org.logrum.ubos.kernel.repository.LcmVersionRepository;
-import org.logrum.ubos.kernel.util.ReactiveRetry; 
+import org.logrum.ubos.kernel.util.JsonSchemaValidator;
+import org.logrum.ubos.kernel.util.ReactiveRetry;
+import org.logrum.ubos.web.console.dto.BranchInfo;
+import org.logrum.ubos.web.console.dto.MergeRequest;
+import org.logrum.ubos.web.console.dto.MergeResult;
+import org.logrum.ubos.web.console.dto.RevertRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.logrum.ubos.kernel.util.UbosUriUtil;
-import org.logrum.ubos.web.console.dto.MergeRequest;
-import org.logrum.ubos.web.console.dto.MergeResult;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
-import org.logrum.ubos.web.console.dto.BranchInfo;
-import org.logrum.ubos.web.console.dto.RevertRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -39,9 +41,19 @@ public class LcmKernelService {
     private final LcmSearchIndexRepository indexRepo;
     private final DatabaseClient dbClient;
     private final ObjectMapper objectMapper;
+    private final JsonSchemaValidator schemaValidator;
 
-    
     private final Retry retryPolicy = ReactiveRetry.databaseTransientErrors();
+
+    /**
+     * Initialize the schema validator with the schema fetcher.
+     * This breaks the circular dependency by setting the fetcher after construction.
+     */
+    @PostConstruct
+    public void initSchemaValidator() {
+        schemaValidator.setSchemaFetcher(this::getResourceSnapshot);
+        log.info("📋 Schema validator initialized with kernel service");
+    }
 
     /**
      * Get resource snapshot using a parsed UBOS URI.
@@ -285,7 +297,9 @@ public class LcmKernelService {
 
     @Transactional
     public Mono<Long> commit(String type, String slug, String branch, String jsonContent, String author, String msg, String processId) {
-        return entityRepo.findByEntityTypeAndSlug(type, slug)
+        // Step 0: Validate JSON against schema (skip for SCHEMA type)
+        return schemaValidator.validate(type, slug, jsonContent)
+            .then(entityRepo.findByEntityTypeAndSlug(type, slug))
             .switchIfEmpty(createEntity(type, slug))
             .flatMap(entity -> {
                 return versionRepo.findHeadSnapshot(entity.getId(), branch)
@@ -316,7 +330,14 @@ public class LcmKernelService {
                             
                             .then(linkProcess(processId, savedCommit.getCommitId()))
                             .thenReturn(savedCommit.getCommitId())
-                    );
+                    )
+                    .doOnSuccess(commitId -> {
+                        // Clear schema cache if we just updated a SCHEMA entity
+                        if ("SCHEMA".equalsIgnoreCase(type)) {
+                            schemaValidator.clearCache(slug);
+                            log.info("📋 Schema cache cleared for {} after commit", slug);
+                        }
+                    });
             });
     }
 
@@ -561,15 +582,14 @@ public class LcmKernelService {
      */
     @Transactional
     public Mono<Long> mergeBranch(String sourceBranch, String targetBranch,
-        String type, String slug,
-        String author, String message) {
+                                   String type, String slug,
+                                   String author, String message) {
         log.info("🔀 Merging {}/{}@{} -> {}", type, slug, sourceBranch, targetBranch);
 
         return entityRepo.findByEntityTypeAndSlug(type, slug)
             .switchIfEmpty(Mono.error(new IllegalArgumentException(
                 String.format("Entity not found: %s/%s", type, slug))))
             .flatMap(entity -> {
-                // Step 1: Get both branch snapshots in parallel
                 Mono<String> targetSnapshotMono = versionRepo.findHeadSnapshot(entity.getId(), targetBranch)
                     .map(LcmEntityVersionChain::getSnapshotData)
                     .defaultIfEmpty("{}");
@@ -579,30 +599,29 @@ public class LcmKernelService {
                     .switchIfEmpty(Mono.error(new IllegalArgumentException(
                         String.format("No HEAD found for %s/%s on source branch '%s'", type, slug, sourceBranch))));
 
-                // Step 2: Zip both snapshots and perform merge
                 return Mono.zip(targetSnapshotMono, sourceSnapshotMono)
                     .flatMap(tuple -> {
                         String targetJson = tuple.getT1();
                         String sourceJson = tuple.getT2();
 
-                        // Step 3: Perform three-way content merge
                         try {
                             String mergedJson = mergeJsonContent(targetJson, sourceJson);
 
-                            // Check if merge resulted in any changes
                             if (mergedJson.equals(targetJson)) {
                                 log.info("⏭️ No changes to merge for {}/{}@{} -> {}",
                                     type, slug, sourceBranch, targetBranch);
                                 return Mono.empty();
                             }
 
-                            // Step 4: Create merge commit on target branch
                             String mergeMessage = (message == null || message.isBlank())
                                 ? String.format("Merge '%s' into '%s' for %s/%s",
-                                sourceBranch, targetBranch, type, slug)
+                                    sourceBranch, targetBranch, type, slug)
                                 : message;
 
-                            return commit(type, slug, targetBranch, mergedJson, author, mergeMessage);
+                            // Validate merged content against schema before commit
+                            return schemaValidator.validate(type, slug, mergedJson)
+                                .then(commit(type, slug, targetBranch, mergedJson, author, mergeMessage));
+
                         } catch (JsonProcessingException e) {
                             return Mono.error(new IllegalArgumentException(
                                 "Failed to merge JSON content: " + e.getMessage()));

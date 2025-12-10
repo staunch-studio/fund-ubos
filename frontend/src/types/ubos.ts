@@ -193,3 +193,18 @@ export interface SaveEnvironmentResponse {
   envName: string;
   message?: string;
 }
+
+// Schema types - Schema definitions are commit-able entities
+export interface SchemaCommitRequest {
+  entityType: string; // Required: the entity type (e.g., "LOGIC", "VIEW")
+  schemaDefinition: string; // Required: JSON Schema definition as string
+  branch: string; // Required: the branch to commit to
+  message: string; // Required: commit message
+  author?: string; // Optional: author of the commit
+}
+
+export interface SchemaCommitResponse {
+  success: boolean;
+  commitId: number; // The commit ID of the schema commit
+  message?: string;
+}
