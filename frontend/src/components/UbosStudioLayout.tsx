@@ -1,0 +1,516 @@
+import { useState, useMemo, useEffect } from 'react'
+import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } from 'antd'
+import type { MenuProps } from 'antd'
+import SplitPane from 'react-split-pane'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge } from 'lucide-react'
+import { EntityManager } from './EntityManager'
+import { SnapshotEditor } from './SnapshotEditor'
+import { ThemeSelector } from './ThemeSelector'
+import { BranchManagerModal } from './BranchManagerModal'
+import { BranchMergeModal } from './BranchMergeModal'
+import type { EntityInstance } from '../types/ubos'
+import { useBatchCommitMutation, useGetBranchesQuery } from '../store/ubosApi'
+import { message } from 'antd'
+import { buildUbosUri } from '../utils/useUbosUri'
+import './UbosStudioLayout.css'
+
+const { Header, Sider, Content } = Layout
+const { Text } = Typography
+
+interface UbosStudioLayoutProps {
+  branches?: string[]
+  entityTypes?: string[]
+}
+
+// Icon mapping for entity types
+const entityTypeIcons: Record<string, React.ReactNode> = {
+  Logic: <Code size={16} />,
+  View: <FileCode size={16} />,
+  Data: <Database size={16} />,
+  Config: <Settings size={16} />,
+  UserProfile: <Users size={16} />,
+  Product: <Box size={16} />,
+  Order: <ShoppingCart size={16} />,
+}
+
+export function UbosStudioLayout({
+  branches: defaultBranches = ['master', 'beijing', 'shanghai', 'development'],
+  entityTypes = ['Logic', 'View', 'Data', 'Config', 'UserProfile', 'Product', 'Order'],
+}: UbosStudioLayoutProps) {
+  const {
+    token: { 
+      colorBgContainer, 
+      colorBgElevated,
+      colorText, 
+      colorTextSecondary,
+      colorBorder,
+      colorPrimary,
+      borderRadius,
+    },
+  } = theme.useToken()
+
+  const [selectedEntity, setSelectedEntity] = useState<EntityInstance | null>(null)
+  const [currentBranch, setCurrentBranch] = useState('master')
+  const [selectedEntityType, setSelectedEntityType] = useState<string | undefined>(undefined)
+  const [editedSnapshotData, setEditedSnapshotData] = useState<Record<string, string>>({})
+  const [commitMessage, setCommitMessage] = useState('')
+  const [uriCopied, setUriCopied] = useState(false)
+  const [branchModalOpen, setBranchModalOpen] = useState(false)
+  const [mergeModalOpen, setMergeModalOpen] = useState(false)
+
+  const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
+
+  // Fetch branches from API
+  const { data: branchesData = [], isLoading: isLoadingBranches } = useGetBranchesQuery()
+  
+  // Use API branches if available, otherwise fall back to default branches
+  const branches = useMemo(() => {
+    if (branchesData.length > 0) {
+      return branchesData.map(b => b.branchName)
+    }
+    return defaultBranches
+  }, [branchesData, defaultBranches])
+
+  // Set initial branch to first available branch
+  useEffect(() => {
+    if (branches.length > 0 && !branches.includes(currentBranch)) {
+      setCurrentBranch(branches[0])
+    }
+  }, [branches, currentBranch])
+
+  const handleBranchChange = (branch: string) => {
+    setCurrentBranch(branch)
+    setSelectedEntity(null)
+    setEditedSnapshotData({})
+  }
+
+  const handleEntityTypeSelect: MenuProps['onClick'] = (e) => {
+    if (e.key === 'all') {
+      setSelectedEntityType(undefined)
+    } else {
+      setSelectedEntityType(e.key)
+    }
+  }
+
+  const handleCommit = async () => {
+    if (!selectedEntity) {
+      message.warning('Please select an entity to commit')
+      return
+    }
+
+    const snapshotData = editedSnapshotData[selectedEntity.slug]
+    if (!snapshotData) {
+      message.warning('No changes detected')
+      return
+    }
+
+    try {
+      const jsonPatch = JSON.stringify([
+        {
+          op: 'replace',
+          path: '/snapshotData',
+          value: snapshotData,
+        },
+      ])
+
+      await batchCommit({
+        slugs: [selectedEntity.slug],
+        branch: currentBranch,
+        jsonPatch,
+        message: commitMessage || `Update ${selectedEntity.slug}`,
+      }).unwrap()
+
+      message.success({
+        content: `Successfully committed changes to ${selectedEntity.slug}`,
+        duration: 2,
+      })
+      setCommitMessage('')
+      setEditedSnapshotData((prev) => {
+        const updated = { ...prev }
+        delete updated[selectedEntity.slug]
+        return updated
+      })
+    } catch (err: any) {
+      message.error(err?.data?.message || 'Failed to commit changes')
+    }
+  }
+
+  const handleSnapshotChange = (slug: string, data: string) => {
+    setEditedSnapshotData((prev) => ({
+      ...prev,
+      [slug]: data,
+    }))
+  }
+
+  const handleCopyUri = () => {
+    if (currentUri) {
+      navigator.clipboard.writeText(currentUri)
+      setUriCopied(true)
+      message.success('URI copied to clipboard', 1.5)
+      setTimeout(() => setUriCopied(false), 2000)
+    }
+  }
+
+  // Build menu items for entity types
+  const menuItems: MenuProps['items'] = useMemo(
+    () => [
+      {
+        key: 'all',
+        icon: <Database size={18} />,
+        label: (
+          <span style={{ fontWeight: selectedEntityType === undefined ? 500 : 400 }}>
+            All Entities
+          </span>
+        ),
+      },
+      {
+        type: 'divider' as const,
+      },
+      ...entityTypes.map((type) => ({
+        key: type,
+        icon: entityTypeIcons[type] || <Code size={18} />,
+        label: (
+          <span style={{ fontWeight: selectedEntityType === type ? 500 : 400 }}>
+            {type}
+          </span>
+        ),
+      })),
+    ],
+    [entityTypes, selectedEntityType]
+  )
+
+  const currentUri = selectedEntity
+    ? buildUbosUri(selectedEntity.entityType, selectedEntity.slug, currentBranch)
+    : ''
+
+  const hasChanges = selectedEntity && editedSnapshotData[selectedEntity.slug]
+
+  return (
+    <Layout style={{ height: '100vh', overflow: 'hidden', background: '#010409' }}>
+      {/* Top Header - Enhanced */}
+      <Header
+        style={{
+          background: 'linear-gradient(180deg, #161B22 0%, #0D1117 100%)',
+          borderBottom: `1px solid ${colorBorder}`,
+          padding: '0 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          height: '56px',
+          boxShadow: '0 1px 0 rgba(255, 255, 255, 0.05)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '8px 12px',
+              background: 'rgba(74, 158, 255, 0.1)',
+              borderRadius: borderRadius,
+              border: `1px solid rgba(74, 158, 255, 0.2)`,
+            }}
+          >
+            <FileCode size={20} color={colorPrimary} />
+            <Text
+              style={{
+                margin: 0,
+                fontSize: '18px',
+                fontWeight: 600,
+                color: colorText,
+                letterSpacing: '-0.3px',
+              }}
+            >
+              UBOS Studio
+            </Text>
+          </div>
+        </div>
+        <Space size="middle">
+          <ThemeSelector />
+          <Space size="small">
+            <GitBranch size={16} color={colorTextSecondary} />
+            <Text style={{ color: colorTextSecondary, fontSize: '13px' }}>Branch:</Text>
+          </Space>
+          <Select
+            value={currentBranch}
+            onChange={handleBranchChange}
+            loading={isLoadingBranches}
+            style={{ 
+              width: 160,
+              fontWeight: 500,
+            }}
+            options={branches.map((b) => ({ 
+              label: (
+                <Space>
+                  <GitBranch size={14} />
+                  <span>{b}</span>
+                </Space>
+              ), 
+              value: b 
+            }))}
+          />
+          <Button
+            type="default"
+            icon={<SettingsIcon size={14} />}
+            onClick={() => setBranchModalOpen(true)}
+            style={{ marginLeft: '8px' }}
+          >
+            Manage Branches
+          </Button>
+          <Button
+            type="primary"
+            icon={<GitMerge size={14} />}
+            onClick={() => setMergeModalOpen(true)}
+            style={{ marginLeft: '8px' }}
+          >
+            Merge
+          </Button>
+        </Space>
+      </Header>
+
+      {/* Branch Manager Modal */}
+      <BranchManagerModal
+        open={branchModalOpen}
+        onCancel={() => setBranchModalOpen(false)}
+        onSuccess={() => {
+          // Branch list will automatically refresh via RTK Query cache invalidation
+        }}
+      />
+
+      {/* Branch Merge Modal */}
+      <BranchMergeModal
+        open={mergeModalOpen}
+        onCancel={() => setMergeModalOpen(false)}
+        onSuccess={() => {
+          // All caches will automatically refresh via RTK Query cache invalidation
+        }}
+        currentBranch={currentBranch}
+      />
+
+      <Layout style={{ height: 'calc(100vh - 56px)', background: '#010409' }}>
+        {/* Left Sidebar - Enhanced */}
+        <Sider
+          width={220}
+          style={{
+            background: colorBgElevated,
+            borderRight: `1px solid ${colorBorder}`,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              padding: '16px',
+              borderBottom: `1px solid ${colorBorder}`,
+              background: 'rgba(74, 158, 255, 0.05)',
+            }}
+          >
+            <Text
+              style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: colorTextSecondary,
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              Entity Types
+            </Text>
+          </div>
+          <Menu
+            mode="inline"
+            selectedKeys={selectedEntityType ? [selectedEntityType] : ['all']}
+            onClick={handleEntityTypeSelect}
+            style={{
+              height: 'calc(100% - 57px)',
+              borderRight: 0,
+              background: 'transparent',
+              padding: '8px',
+            }}
+            items={menuItems}
+          />
+        </Sider>
+
+        {/* Main Content Area with Split Pane */}
+        <Content
+          style={{
+            background: colorBgContainer,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
+          <SplitPane
+            split="vertical"
+            minSize={320}
+            maxSize={-320}
+            defaultSize="50%"
+            style={{ height: '100%' }}
+            paneStyle={{ overflow: 'hidden' }}
+            resizerStyle={{
+              background: colorBorder,
+              width: '2px',
+              cursor: 'col-resize',
+              zIndex: 10,
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {/* Left Pane: Entity Grid */}
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
+              <EntityManager
+                selectedEntity={selectedEntity}
+                onRowSelect={setSelectedEntity}
+                currentBranch={currentBranch}
+                onBranchChange={handleBranchChange}
+                editedSnapshotData={editedSnapshotData}
+                entityTypeFilter={selectedEntityType}
+              />
+            </div>
+
+            {/* Right Pane: Code Inspector - Enhanced */}
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
+              {/* Metadata Bar - Full UBOS URI - Enhanced */}
+              {selectedEntity ? (
+                <div
+                  style={{
+                    padding: '14px 20px',
+                    background: `linear-gradient(135deg, ${colorBgElevated} 0%, ${colorBgContainer} 100%)`,
+                    borderBottom: `1px solid ${colorBorder}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '4px 8px',
+                      background: 'rgba(74, 158, 255, 0.1)',
+                      borderRadius: '4px',
+                      border: `1px solid rgba(74, 158, 255, 0.2)`,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: colorPrimary,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px',
+                      }}
+                    >
+                      URI
+                    </Text>
+                  </div>
+                  <Input
+                    readOnly
+                    value={currentUri}
+                    style={{
+                      fontFamily: '"SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace',
+                      fontSize: '13px',
+                      flex: 1,
+                      background: colorBgContainer,
+                      border: `1px solid ${colorBorder}`,
+                      color: colorText,
+                      fontWeight: 400,
+                    }}
+                    suffix={
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={uriCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                        onClick={handleCopyUri}
+                        style={{
+                          fontSize: '12px',
+                          color: uriCopied ? colorPrimary : colorTextSecondary,
+                          minWidth: 'auto',
+                        }}
+                      >
+                        {uriCopied ? 'Copied' : 'Copy'}
+                      </Button>
+                    }
+                  />
+                  {hasChanges && (
+                    <Badge
+                      status="processing"
+                      text={
+                        <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
+                          Modified
+                        </Text>
+                      }
+                    />
+                  )}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    padding: '14px 20px',
+                    background: colorBgElevated,
+                    borderBottom: `1px solid ${colorBorder}`,
+                    textAlign: 'center',
+                  }}
+                >
+                  <Text style={{ color: colorTextSecondary, fontSize: '13px' }}>
+                    Select an entity to view and edit
+                  </Text>
+                </div>
+              )}
+
+              {/* Monaco Editor - Full Height */}
+              <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+                <SnapshotEditor
+                  entity={selectedEntity}
+                  branches={branches}
+                  currentBranch={currentBranch}
+                  onBranchChange={handleBranchChange}
+                  onCommit={handleCommit}
+                  onSnapshotChange={handleSnapshotChange}
+                  hideHeader={true}
+                />
+              </div>
+
+              {/* Action Bar - Commit Message & Button - Enhanced */}
+              <div
+                style={{
+                  padding: '16px 20px',
+                  background: `linear-gradient(180deg, ${colorBgContainer} 0%, ${colorBgElevated} 100%)`,
+                  borderTop: `1px solid ${colorBorder}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  boxShadow: '0 -1px 3px rgba(0, 0, 0, 0.1)',
+                }}
+              >
+                <Input
+                  placeholder="Enter commit message..."
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  onPressEnter={handleCommit}
+                  style={{ flex: 1 }}
+                  disabled={!selectedEntity}
+                  prefix={
+                    <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>💬</Text>
+                  }
+                />
+                <Button
+                  type="primary"
+                  onClick={handleCommit}
+                  loading={isCommitting}
+                  disabled={!selectedEntity || !hasChanges}
+                  style={{
+                    minWidth: 140,
+                    height: 36,
+                    fontWeight: 500,
+                    boxShadow: hasChanges ? `0 2px 8px rgba(74, 158, 255, 0.3)` : 'none',
+                  }}
+                  icon={<CheckCircle2 size={16} />}
+                >
+                  {isCommitting ? 'Committing...' : 'Commit Changes'}
+                </Button>
+              </div>
+            </div>
+          </SplitPane>
+        </Content>
+      </Layout>
+    </Layout>
+  )
+}

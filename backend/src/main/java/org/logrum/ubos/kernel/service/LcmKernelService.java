@@ -1,7 +1,9 @@
 package org.logrum.ubos.kernel.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.logrum.ubos.kernel.model.LcmEntityInstance;
 import org.logrum.ubos.kernel.model.LcmEntitySearchIndex;
 import org.logrum.ubos.kernel.model.LcmEntityVersionChain;
@@ -11,12 +13,17 @@ import org.logrum.ubos.kernel.repository.LcmVersionRepository;
 import org.logrum.ubos.kernel.util.ReactiveRetry; 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.logrum.ubos.kernel.util.UbosUriUtil;
+import org.logrum.ubos.web.console.dto.MergeRequest;
+import org.logrum.ubos.web.console.dto.MergeResult;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry; 
+import reactor.util.retry.Retry;
+import org.logrum.ubos.web.console.dto.BranchInfo;
+import org.logrum.ubos.web.console.dto.RevertRequest;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -36,9 +43,20 @@ public class LcmKernelService {
     
     private final Retry retryPolicy = ReactiveRetry.databaseTransientErrors();
 
-    
-    
-    
+    /**
+     * Get resource snapshot using a parsed UBOS URI.
+     *
+     * @param uriDetails the parsed URI details containing type, slug, branch, and optional commitId
+     * @return the JSON snapshot content
+     */
+    public Mono<String> getResourceSnapshot(UbosUriUtil.UbosUriDetails uriDetails) {
+        // If a specific commitId is provided, retrieve that exact version
+        if (uriDetails.hasCommitId()) {
+            return getSnapshotByCommit(uriDetails.commitId());
+        }
+        // Otherwise, get the latest snapshot for the branch
+        return getResourceSnapshot(uriDetails.type(), uriDetails.slug(), uriDetails.branch());
+    }
 
     public Mono<String> getResourceSnapshot(String type, String slug, String branch) {
         return findInBranchRecursive(type, slug, branch);
@@ -264,4 +282,297 @@ public class LcmKernelService {
             .one()
             .defaultIfEmpty(false);
     }
+
+    // ==================== Branch Management Methods ====================
+
+    /**
+     * Revert an entity's branch HEAD to a specified historical commit.
+     * This effectively "undoes" later changes by moving the HEAD pointer.
+     *
+     * @param request the revert request containing slug, type, branch, targetCommitId, and message
+     * @return Mono<Long> the target commit ID if successful
+     */
+    @Transactional
+    public Mono<Long> revertToCommit(RevertRequest request) {
+        String type = request.resolvedType();
+        String branch = request.resolvedBranch();
+        Long targetCommitId = request.targetCommitId();
+        
+        log.info("🔄 Reverting {}/{}@{} to commit {}", type, request.slug(), branch, targetCommitId);
+        
+        return entityRepo.findByEntityTypeAndSlug(type, request.slug())
+            .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                String.format("Entity not found: %s/%s", type, request.slug()))))
+            .flatMap(entity -> 
+                // Verify the target commit exists and belongs to this entity
+                versionRepo.findById(targetCommitId)
+                    .filter(commit -> commit.getEntityId().equals(entity.getId()))
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                        String.format("Commit %d not found or does not belong to entity %s/%s", 
+                                     targetCommitId, type, request.slug()))))
+                    .flatMap(commit -> {
+                        // Update the branch HEAD to point to the target commit
+                        String sql = """
+                            UPDATE lcm_entity_branch_head 
+                            SET head_commit_id = :commitId, updated_at = NOW()
+                            WHERE entity_id = :entityId AND branch_name = :branch
+                        """;
+                        return dbClient.sql(sql)
+                            .bind("commitId", targetCommitId)
+                            .bind("entityId", entity.getId())
+                            .bind("branch", branch)
+                            .fetch()
+                            .rowsUpdated()
+                            .flatMap(rowsUpdated -> {
+                                if (rowsUpdated == 0) {
+                                    return Mono.error(new IllegalArgumentException(
+                                        String.format("No HEAD found for entity %s/%s on branch %s", 
+                                                     type, request.slug(), branch)));
+                                }
+                                log.info("✅ Reverted {}/{}@{} to commit {}", type, request.slug(), branch, targetCommitId);
+                                return Mono.just(targetCommitId);
+                            });
+                    })
+            )
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Create a new branch with its HEAD pointing to a specific commit.
+     *
+     * @param newBranchName    the name of the new branch
+     * @param baseCommitId     the commit ID to base the new branch on
+     * @param parentBranchName the parent branch for inheritance (nullable, defaults behavior)
+     * @param description      optional description for the branch
+     * @return Mono<String> the new branch name if successful
+     */
+    @Transactional
+    public Mono<String> createBranch(String newBranchName, Long baseCommitId,
+                                      String parentBranchName, String description) {
+        log.info("🌿 Creating branch '{}' based on commit {}, parent: {}",
+                newBranchName, baseCommitId, parentBranchName);
+
+        String resolvedParent = (parentBranchName == null || parentBranchName.isBlank())
+                               ? "master" : parentBranchName;
+        String resolvedDescription = (description == null || description.isBlank())
+                                    ? "Branch created from commit " + baseCommitId : description;
+
+        // First, verify the base commit exists
+        return versionRepo.findById(baseCommitId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                "Base commit not found: " + baseCommitId)))
+            .flatMap(baseCommit -> {
+                // Insert the new branch into sys_branch_config
+                String insertBranchSql = """
+                    INSERT INTO sys_branch_config (branch_name, parent_branch, description)
+                    VALUES (:branchName, :parentBranch, :description)
+                """;
+                return dbClient.sql(insertBranchSql)
+                    .bind("branchName", newBranchName)
+                    .bind("parentBranch", resolvedParent)
+                    .bind("description", resolvedDescription)
+                    .then()
+                    .then(Mono.defer(() -> {
+                        // Create a HEAD entry for the entity of the base commit
+                        String insertHeadSql = """
+                            INSERT INTO lcm_entity_branch_head (entity_id, branch_name, head_commit_id, updated_at)
+                            VALUES (:entityId, :branchName, :commitId, NOW())
+                            ON CONFLICT (entity_id, branch_name) DO NOTHING
+                        """;
+                        return dbClient.sql(insertHeadSql)
+                            .bind("entityId", baseCommit.getEntityId())
+                            .bind("branchName", newBranchName)
+                            .bind("commitId", baseCommitId)
+                            .then();
+                    }))
+                    .thenReturn(newBranchName);
+            })
+            .doOnSuccess(name -> log.info("✅ Branch '{}' created successfully", name))
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Get all available branches from sys_branch_config.
+     *
+     * @return Flux<BranchInfo> stream of branch information
+     */
+    public Flux<BranchInfo> getAvailableBranches() {
+        String sql = "SELECT branch_name, parent_branch, description FROM sys_branch_config ORDER BY branch_name";
+        return dbClient.sql(sql)
+            .map((row, meta) -> new BranchInfo(
+                row.get("branch_name", String.class),
+                row.get("parent_branch", String.class),
+                row.get("description", String.class)
+            ))
+            .all()
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Merge a single entity from source branch into target branch.
+     * Uses a simplified "Source Wins" strategy for content merging.
+     *
+     * <p>Logic:
+     * <ol>
+     *   <li>Get Target HEAD snapshot (base for merge)</li>
+     *   <li>Get Source HEAD snapshot (changes to merge in)</li>
+     *   <li>Perform content merge (source fields override target fields)</li>
+     *   <li>Create new merge commit on target branch</li>
+     * </ol>
+     *
+     * @param sourceBranch the branch to merge from
+     * @param targetBranch the branch to merge into
+     * @param type         the entity type
+     * @param slug         the entity slug
+     * @param author       the author performing the merge
+     * @param message      the merge commit message
+     * @return Mono<Long> the new merge commit ID
+     */
+    @Transactional
+    public Mono<Long> mergeBranch(String sourceBranch, String targetBranch,
+        String type, String slug,
+        String author, String message) {
+        log.info("🔀 Merging {}/{}@{} -> {}", type, slug, sourceBranch, targetBranch);
+
+        return entityRepo.findByEntityTypeAndSlug(type, slug)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                String.format("Entity not found: %s/%s", type, slug))))
+            .flatMap(entity -> {
+                // Step 1: Get both branch snapshots in parallel
+                Mono<String> targetSnapshotMono = versionRepo.findHeadSnapshot(entity.getId(), targetBranch)
+                    .map(LcmEntityVersionChain::getSnapshotData)
+                    .defaultIfEmpty("{}");
+
+                Mono<String> sourceSnapshotMono = versionRepo.findHeadSnapshot(entity.getId(), sourceBranch)
+                    .map(LcmEntityVersionChain::getSnapshotData)
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                        String.format("No HEAD found for %s/%s on source branch '%s'", type, slug, sourceBranch))));
+
+                // Step 2: Zip both snapshots and perform merge
+                return Mono.zip(targetSnapshotMono, sourceSnapshotMono)
+                    .flatMap(tuple -> {
+                        String targetJson = tuple.getT1();
+                        String sourceJson = tuple.getT2();
+
+                        // Step 3: Perform three-way content merge
+                        try {
+                            String mergedJson = mergeJsonContent(targetJson, sourceJson);
+
+                            // Check if merge resulted in any changes
+                            if (mergedJson.equals(targetJson)) {
+                                log.info("⏭️ No changes to merge for {}/{}@{} -> {}",
+                                    type, slug, sourceBranch, targetBranch);
+                                return Mono.empty();
+                            }
+
+                            // Step 4: Create merge commit on target branch
+                            String mergeMessage = (message == null || message.isBlank())
+                                ? String.format("Merge '%s' into '%s' for %s/%s",
+                                sourceBranch, targetBranch, type, slug)
+                                : message;
+
+                            return commit(type, slug, targetBranch, mergedJson, author, mergeMessage);
+                        } catch (JsonProcessingException e) {
+                            return Mono.error(new IllegalArgumentException(
+                                "Failed to merge JSON content: " + e.getMessage()));
+                        }
+                    });
+            })
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Merge JSON content using a "Source Wins" strategy.
+     *
+     * <p>This performs a shallow merge where:
+     * <ul>
+     *   <li>All top-level fields from source are applied to target</li>
+     *   <li>Source values override target values for conflicting keys</li>
+     *   <li>Target-only fields are preserved</li>
+     * </ul>
+     *
+     * @param targetJson the target branch JSON (base)
+     * @param sourceJson the source branch JSON (changes)
+     * @return merged JSON string
+     * @throws JsonProcessingException if JSON parsing fails
+     */
+    private String mergeJsonContent(String targetJson, String sourceJson) throws JsonProcessingException
+    {
+        JsonNode targetNode = objectMapper.readTree(targetJson);
+        JsonNode sourceNode = objectMapper.readTree(sourceJson);
+
+        // If target is empty, just use source
+        if (targetNode.isEmpty() || targetNode.isNull()) {
+            return sourceJson;
+        }
+
+        // If source is empty, keep target
+        if (sourceNode.isEmpty() || sourceNode.isNull()) {
+            return targetJson;
+        }
+
+        // Perform merge: source wins for conflicts
+        ObjectNode mergedNode = deepMerge(
+            (ObjectNode) targetNode.deepCopy(),
+            (ObjectNode) sourceNode
+        );
+
+        return objectMapper.writeValueAsString(mergedNode);
+    }
+
+    /**
+     * Deep merge two ObjectNodes with "source wins" conflict resolution.
+     *
+     * @param target the target node (will be modified)
+     * @param source the source node
+     * @return merged ObjectNode
+     */
+    private ObjectNode deepMerge(ObjectNode target, ObjectNode source) {
+        Iterator<String> fieldNames = source.fieldNames();
+        while (fieldNames.hasNext()) {
+            String fieldName = fieldNames.next();
+            JsonNode sourceValue = source.get(fieldName);
+            JsonNode targetValue = target.get(fieldName);
+
+            if (targetValue != null && targetValue.isObject() && sourceValue.isObject()) {
+                // Recursively merge nested objects
+                deepMerge((ObjectNode) targetValue, (ObjectNode) sourceValue);
+            } else {
+                // Source wins: replace target value with source value
+                target.set(fieldName, sourceValue.deepCopy());
+            }
+        }
+        return target;
+    }
+
+    /**
+     * Merge multiple entities from source branch into target branch.
+     *
+     * @param request the merge request containing source/target branches and slugs
+     * @return Flux<MergeResult> stream of merge results for each entity
+     */
+    public Flux<MergeResult> mergeBranches(MergeRequest request) {
+        String sourceBranch = request.sourceBranch();
+        String targetBranch = request.resolvedTargetBranch();
+        String type = request.resolvedType();
+        String author = request.resolvedAuthor();
+        String message = request.resolvedMessage();
+
+        log.info("🔀 Batch merge started: {} -> {}, type={}, slugs={}",
+            sourceBranch, targetBranch, type, request.slugs());
+
+        return Flux.fromIterable(request.slugs())
+            .flatMap(slug ->
+                mergeBranch(sourceBranch, targetBranch, type, slug, author, message)
+                    .map(commitId -> MergeResult.singleSuccess(slug, commitId))
+                    .switchIfEmpty(Mono.just(MergeResult.skipped(slug,
+                        String.format("No changes to merge for '%s'", slug))))
+                    .onErrorResume(e -> {
+                        log.error("❌ Failed to merge {}/{}: {}", type, slug, e.getMessage());
+                        return Mono.just(MergeResult.failure(slug, e.getMessage()));
+                    })
+            );
+    }
+
+
 }

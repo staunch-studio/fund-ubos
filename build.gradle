@@ -45,6 +45,13 @@ project(':backend') {
         implementation 'org.springframework.boot:spring-boot-starter-data-r2dbc'
         runtimeOnly 'org.postgresql:r2dbc-postgresql:1.0.7.RELEASE'
 
+        implementation 'org.flywaydb:flyway-core'
+        implementation 'org.flywaydb:flyway-database-postgresql:10.15.0'
+        implementation 'org.springframework:spring-jdbc'
+        
+        // PostgreSQL JDBC driver (required for Flyway migrations)
+        runtimeOnly 'org.postgresql:postgresql'
+        
         // Engine
         implementation 'org.springframework.boot:spring-boot-starter'
         implementation 'org.apache.groovy:groovy:4.0.15'

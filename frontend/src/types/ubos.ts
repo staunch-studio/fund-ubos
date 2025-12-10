@@ -12,14 +12,16 @@ export interface EntityInstance {
 }
 
 // Corresponds to org.logrum.ubos.core.model.EntityVersionChain
+// All fields must use Camel Case to match backend JSON output
 export interface EntitySnapshot {
-  commitId: number;
-  entityId: string;
-  branchName: string;
-  snapshotData: string; // RAW JSON String - do not parse
-  authorId: string;
-  message: string;
-  createdAt?: string; // ISO String, optional
+  commitId: number; // ✅ Camel Case: commitId (NOT commit_id)
+  entityId: string; // ✅ Camel Case: entityId (NOT entity_id)
+  branchName: string; // ✅ Camel Case: branchName (NOT branch_name)
+  parentCommitId: number | null; // ✅ Camel Case: parentCommitId (NOT parent_commit_id)
+  snapshotData: string; // ✅ Camel Case: snapshotData (NOT snapshot_data) - RAW JSON String - do not parse
+  authorId: string; // ✅ Camel Case: authorId (NOT author_id)
+  message: string; // ✅ Camel Case: message
+  createdAt?: string; // ✅ Camel Case: createdAt (NOT created_at) - ISO String, optional
 }
 
 // API Request/Response types
@@ -29,10 +31,17 @@ export interface GetEntitiesParams {
   search?: string;
 }
 
-export interface GetSnapshotParams {
-  slug: string;
-  entityType: string;
+// Resource Context Request DTO - matches Java ResourceContextRequest
+// Used for operations that require slug, type, and branch context
+export interface ResourceContextRequest {
+  slug: string; // Required: the entity slug identifier
+  type: string; // Required: the entity type (e.g., "LOGIC", "TYPE")
+  branch: string; // Required: the branch name (e.g., "master")
 }
+
+// Legacy aliases for backward compatibility (deprecated, use ResourceContextRequest)
+export interface GetSnapshotParams extends ResourceContextRequest {}
+export interface GetHistoryParams extends ResourceContextRequest {}
 
 export interface BatchCommitRequest {
   slugs: string[];
@@ -44,5 +53,75 @@ export interface BatchCommitRequest {
 export interface BatchCommitResponse {
   success: boolean;
   commitIds: number[];
+  message?: string;
+}
+
+// History and Diff types
+// All fields must use Camel Case to match backend JSON output
+export interface HistoryRecord {
+  commitId: number; // ✅ Camel Case: commitId (NOT commit_id)
+  branchName: string; // ✅ Camel Case: branchName (NOT branch_name)
+  authorId: string; // ✅ Camel Case: authorId (NOT author_id)
+  message: string; // ✅ Camel Case: message
+  createdAt: string; // ✅ Camel Case: createdAt (NOT created_at) - ISO String
+  entityId?: string; // ✅ Camel Case: entityId (NOT entity_id) - Optional
+  parentCommitId?: number | null; // ✅ Camel Case: parentCommitId (NOT parent_commit_id) - Optional
+}
+
+// GetHistoryParams is now ResourceContextRequest (see above)
+
+// Snapshot by Commit Request - extends ResourceContextRequest with commitId
+export interface GetSnapshotByCommitParams extends ResourceContextRequest {
+  commitId: number; // Required: the commit ID to fetch
+}
+
+// Branch management types
+export interface Branch {
+  branchName: string; // ✅ Camel Case: branchName (NOT name)
+  createdAt?: string; // ISO String, optional
+}
+
+export interface CreateBranchRequest {
+  newBranchName: string;
+  baseCommitId: number; // Required: the commit ID that the new branch HEAD should point to
+  parentBranchName?: string; // Optional: parent branch name for inheritance (defaults to "master")
+  description?: string; // Optional: description for the new branch
+}
+
+export interface CreateBranchResponse {
+  success: boolean;
+  branchName: string;
+  message?: string;
+}
+
+// Revert types
+export interface RevertRequest {
+  slug: string; // Required: the entity slug identifier
+  type: string; // Required: the entity type (e.g., "LOGIC", "TYPE"), defaults to "LOGIC" if null
+  branch: string; // Required: the branch name (e.g., "master")
+  commitId: number; // Required: the target commit ID to revert to
+  author?: string; // Optional: author of the revert operation
+  message?: string; // Optional: message describing the revert
+}
+
+export interface RevertResponse {
+  success: boolean;
+  commitId: number;
+  message?: string;
+}
+
+// Merge types
+export interface MergeRequest {
+  sourceBranch: string; // Required: the branch to merge FROM (e.g., "dev")
+  targetBranch: string; // Required: the branch to merge TO (e.g., "master")
+  slugs: string[]; // Required: array of entity slugs to merge
+  message: string; // Required: commit message for the merge
+  author?: string; // Optional: author of the merge operation
+}
+
+export interface MergeResponse {
+  success: boolean;
+  commitId: number; // The commit ID of the merge commit
+  mergedSlugs: string[]; // List of successfully merged entity slugs
   message?: string;
 }

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
+import { Tabs, theme, Typography } from 'antd'
+import type { TabsProps } from 'antd'
 import { useGetSnapshotQuery } from '../store/ubosApi'
 import type { EntityInstance } from '../types/ubos'
-import { Button } from './ui/button'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
-import { Select } from './ui/select'
-import { GitCommit, History, Loader2 } from 'lucide-react'
-import { message } from 'antd'
+import { FileCode, History, Loader2 } from 'lucide-react'
+import { HistoryViewer } from './HistoryViewer'
+
+const { Text } = Typography
 
 interface SnapshotEditorProps {
   entity: EntityInstance | null
@@ -15,21 +16,23 @@ interface SnapshotEditorProps {
   onBranchChange: (branch: string) => void
   onCommit?: (snapshotData: string, commitMessage?: string) => void
   onSnapshotChange?: (slug: string, data: string) => void
+  hideHeader?: boolean
 }
 
 export function SnapshotEditor({
   entity,
-  branches,
   currentBranch,
-  onBranchChange,
-  onCommit,
   onSnapshotChange,
 }: SnapshotEditorProps) {
+  const {
+    token: { colorBgContainer, colorText, colorTextSecondary, colorBorder },
+  } = theme.useToken()
+
   const [editorValue, setEditorValue] = useState('')
-  const [commitMessage, setCommitMessage] = useState('')
-  const [activeTab, setActiveTab] = useState('editor')
+  const [activeTab, setActiveTab] = useState('current')
 
   // RTK Query - skip if no entity selected
+  // Uses ResourceContextRequest DTO
   const {
     data: snapshot,
     isLoading,
@@ -37,7 +40,8 @@ export function SnapshotEditor({
   } = useGetSnapshotQuery(
     {
       slug: entity?.slug || '',
-      entityType: entity?.entityType || '',
+      type: entity?.entityType || '',
+      branch: currentBranch,
     },
     {
       skip: !entity?.slug || !entity?.entityType,
@@ -61,21 +65,6 @@ export function SnapshotEditor({
     }
   }, [snapshot, entity])
 
-  const handleCommit = () => {
-    if (!editorValue.trim() || !entity) {
-      message.warning('No changes to commit')
-      return
-    }
-
-    if (onCommit) {
-      onCommit(editorValue, commitMessage || undefined)
-      setCommitMessage('')
-      message.success('Changes committed successfully')
-    } else {
-      message.info('Commit handler not implemented')
-    }
-  }
-
   const handleEditorChange = (value: string | undefined) => {
     const newValue = value || ''
     setEditorValue(newValue)
@@ -87,10 +76,21 @@ export function SnapshotEditor({
 
   if (!entity) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground bg-card">
-        <div className="text-center">
-          <p className="text-lg mb-2">No entity selected</p>
-          <p className="text-sm">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          color: colorTextSecondary,
+          background: colorBgContainer,
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <p style={{ fontSize: '16px', marginBottom: '8px', color: colorText }}>
+            No entity selected
+          </p>
+          <p style={{ fontSize: '13px' }}>
             Select an entity from the grid to view and edit its snapshot data
           </p>
         </div>
@@ -98,166 +98,127 @@ export function SnapshotEditor({
     )
   }
 
-  return (
-    <div className="flex flex-col h-full bg-card">
-      {/* Header with Branch Selector */}
-      <div className="border-b border-border p-3 flex items-center justify-between bg-card">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-foreground">
-              Branch:
-            </label>
-            <Select
-              value={currentBranch}
-              onChange={(e) => onBranchChange(e.target.value)}
-              className="w-40"
-            >
-              {branches.map((branch) => (
-                <option key={branch} value={branch}>
-                  {branch}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="text-sm text-muted-foreground">
-            <span className="font-medium">{entity.slug}</span>
-            <span className="mx-2">•</span>
-            <span>{entity.entityType}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <Tabs
-        value={activeTab}
-        onValueChange={setActiveTab}
-        className="flex-1 flex flex-col"
-      >
-        <div className="border-b border-border px-4">
-          <TabsList>
-            <TabsTrigger value="editor">
-              <GitCommit className="h-4 w-4 mr-2" />
-              Editor
-            </TabsTrigger>
-            <TabsTrigger value="history">
-              <History className="h-4 w-4 mr-2" />
-              History
-            </TabsTrigger>
-          </TabsList>
-        </div>
-
-        {/* Editor Tab */}
-        <TabsContent value="editor" className="flex-1 flex flex-col m-0">
+  // Tab items for Ant Design Tabs
+  const tabItems: TabsProps['items'] = [
+    {
+      key: 'current',
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <FileCode size={16} />
+          Current State
+        </span>
+      ),
+      children: (
+        <div style={{ height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column', minHeight: 400 }}>
           {isLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-muted-foreground">
-                Loading snapshot...
-              </span>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: colorTextSecondary,
+              }}
+            >
+              <Loader2 size={20} style={{ marginRight: '8px' }} />
+              <Text style={{ color: colorTextSecondary }}>Loading snapshot...</Text>
             </div>
           ) : error ? (
-            <div className="flex items-center justify-center h-full text-destructive">
-              <div className="text-center">
-                <p className="mb-2">Error loading snapshot</p>
-                <p className="text-sm text-muted-foreground">
-                  {JSON.stringify(error)}
-                </p>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: '#F85149',
+              }}
+            >
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ marginBottom: '8px' }}>Error loading snapshot</p>
+                <Text type="danger" style={{ fontSize: '12px' }}>
+                  {error && 'data' in error && typeof error.data === 'string' 
+                    ? error.data 
+                    : JSON.stringify(error)}
+                </Text>
               </div>
             </div>
           ) : (
-            <>
-              <div className="flex-1 border-b border-border">
-                <Editor
-                  height="100%"
-                  defaultLanguage="json"
-                  value={editorValue}
-                  onChange={handleEditorChange}
-                  theme="vs-dark"
-                  loading={
-                    <div className="flex items-center justify-center h-full">
-                      Loading editor...
-                    </div>
-                  }
-                  options={{
-                    minimap: { enabled: true },
-                    fontSize: 14,
-                    wordWrap: 'on',
-                    formatOnPaste: true,
-                    formatOnType: true,
-                    automaticLayout: true,
-                    scrollBeyondLastLine: false,
-                  }}
-                />
-              </div>
-              <div className="p-3 border-t border-border bg-card">
-                <div className="flex items-center gap-2 mb-2">
-                  <input
-                    type="text"
-                    placeholder="Commit message (optional)"
-                    value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                    className="flex-1 h-9 px-3 rounded-md border border-input bg-background text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                  <Button
-                    onClick={handleCommit}
-                    disabled={!editorValue.trim()}
+            <div style={{ flex: 1, height: '100%', minHeight: 0, position: 'relative' }}>
+              <Editor
+                height="100%"
+                defaultLanguage="json"
+                value={editorValue || '{}'}
+                onChange={handleEditorChange}
+                theme="vs-dark"
+                loading={
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      height: '100%',
+                    }}
                   >
-                    <GitCommit className="h-4 w-4 mr-2" />
-                    Commit Changes
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Raw JSON editor - preserves exact data format. Changes are
-                  committed to branch: <strong>{currentBranch}</strong>
-                </p>
-              </div>
-            </>
-          )}
-        </TabsContent>
-
-        {/* History Tab */}
-        <TabsContent value="history" className="flex-1 m-0 overflow-auto">
-          <div className="p-4">
-            <h3 className="text-lg font-semibold mb-4">Version Chain</h3>
-            {snapshot ? (
-              <div className="border border-border rounded-lg p-4 bg-background">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      #{snapshot.commitId}
-                    </span>
-                    <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">
-                      Latest
-                    </span>
+                    Loading editor...
                   </div>
-                  {snapshot.createdAt && (
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(snapshot.createdAt).toLocaleString()}
-                    </span>
-                  )}
-                </div>
-                {snapshot.message && (
-                  <p className="text-sm font-medium mb-2">
-                    {snapshot.message}
-                  </p>
-                )}
-                {snapshot.authorId && (
-                  <p className="text-xs text-muted-foreground">
-                    Author: {snapshot.authorId}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground mt-1">
-                  Branch: {snapshot.branchName}
-                </p>
-              </div>
-            ) : (
-              <div className="text-center text-muted-foreground py-8">
-                No version history available
-              </div>
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
+                }
+                options={{
+                  minimap: { enabled: true },
+                  fontSize: 14,
+                  wordWrap: 'on',
+                  formatOnPaste: true,
+                  formatOnType: true,
+                  automaticLayout: true,
+                  scrollBeyondLastLine: false,
+                  readOnly: false,
+                }}
+              />
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'history',
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <History size={16} />
+          History
+        </span>
+      ),
+      children: (
+        <div style={{ height: 'calc(100vh - 200px)', minHeight: 400 }}>
+          <HistoryViewer entity={entity} currentBranch={currentBranch} />
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: colorBgContainer,
+      }}
+    >
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={tabItems}
+        style={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        tabBarStyle={{
+          margin: 0,
+          padding: '0 16px',
+          background: colorBgContainer,
+          borderBottom: `1px solid ${colorBorder}`,
+        }}
+      />
     </div>
   )
 }

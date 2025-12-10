@@ -3,9 +3,18 @@ import type {
   EntityInstance,
   EntitySnapshot,
   GetEntitiesParams,
-  GetSnapshotParams,
+  ResourceContextRequest,
   BatchCommitRequest,
   BatchCommitResponse,
+  HistoryRecord,
+  GetSnapshotByCommitParams,
+  Branch,
+  CreateBranchRequest,
+  CreateBranchResponse,
+  RevertRequest,
+  RevertResponse,
+  MergeRequest,
+  MergeResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -20,7 +29,7 @@ export const ubosApi = createApi({
     baseUrl: '/api/console',
     // No Authorization headers - backend uses IP whitelisting
   }),
-  tagTypes: ['Entity', 'Snapshot'],
+  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch'],
   endpoints: (builder) => ({
     // GET /entities
     getEntities: builder.query<EntityInstance[], GetEntitiesParams>({
@@ -48,16 +57,20 @@ export const ubosApi = createApi({
     }),
 
     // GET /snapshot
-    getSnapshot: builder.query<EntitySnapshot, GetSnapshotParams>({
+    // Uses ResourceContextRequest DTO (slug, type, branch)
+    // No transformResponse needed - backend returns Camel Case JSON directly
+    getSnapshot: builder.query<EntitySnapshot, ResourceContextRequest>({
       query: (params) => ({
         url: 'snapshot',
         params: {
           slug: params.slug,
-          type: params.entityType,
+          type: params.type,
+          branch: params.branch,
         },
       }),
+      // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case
       providesTags: (_result, _error, arg) => [
-        { type: 'Snapshot', id: `${arg.slug}-${arg.entityType}` },
+        { type: 'Snapshot', id: `${arg.slug}-${arg.type}` },
       ],
     }),
 
@@ -76,6 +89,109 @@ export const ubosApi = createApi({
         return [{ type: 'Entity', id: 'LIST' }]
       },
     }),
+
+    // GET /history
+    // Uses ResourceContextRequest DTO (slug, type, branch)
+    // No transformResponse needed - backend returns Camel Case JSON directly
+    getHistory: builder.query<HistoryRecord[], ResourceContextRequest>({
+      query: (params) => ({
+        url: 'history',
+        params: {
+          slug: params.slug,
+          type: params.type,
+          branch: params.branch,
+        },
+      }),
+      // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case
+      providesTags: (_result, _error, arg) => [
+        { type: 'History', id: `${arg.slug}-${arg.type}` },
+      ],
+    }),
+
+    // GET /snapshot/{commitId}
+    // Uses GetSnapshotByCommitParams (extends ResourceContextRequest with commitId)
+    // No transformResponse needed - backend returns Camel Case JSON directly
+    getSnapshotByCommit: builder.query<EntitySnapshot, GetSnapshotByCommitParams>({
+      query: (params) => ({
+        url: `snapshot/${params.commitId}`,
+        params: {
+          slug: params.slug,
+          type: params.type,
+          branch: params.branch,
+        },
+      }),
+      // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case
+      providesTags: (_result, _error, arg) => [
+        { type: 'Snapshot', id: `${arg.slug}-${arg.type}-${arg.commitId}` },
+      ],
+    }),
+
+    // GET /branches
+    // No transformResponse needed - backend returns Camel Case JSON directly
+    getBranches: builder.query<Branch[], void>({
+      query: () => ({
+        url: 'branches',
+      }),
+      // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case
+      providesTags: [{ type: 'Branch', id: 'LIST' }],
+    }),
+
+    // POST /branch/create
+    createBranch: builder.mutation<CreateBranchResponse, CreateBranchRequest>({
+      query: (body) => ({
+        url: 'branch/create',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        // Invalidate branch list to trigger refresh
+        return [{ type: 'Branch', id: 'LIST' }]
+      },
+    }),
+
+    // POST /revert
+    revert: builder.mutation<RevertResponse, RevertRequest>({
+      query: (body) => ({
+        url: 'revert',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error, arg) => {
+        if (error) {
+          return []
+        }
+        // Invalidate snapshot and history for the reverted entity
+        return [
+          { type: 'Snapshot', id: `${arg.slug}-${arg.type}` },
+          { type: 'History', id: `${arg.slug}-${arg.type}` },
+          { type: 'Entity', id: 'LIST' },
+        ]
+      },
+    }),
+
+    // POST /merge
+    merge: builder.mutation<MergeResponse, MergeRequest>({
+      query: (body) => ({
+        url: 'merge',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        // Invalidate all caches to ensure fresh data after merge
+        return [
+          { type: 'Entity', id: 'LIST' },
+          { type: 'Snapshot', id: 'LIST' },
+          { type: 'History', id: 'LIST' },
+          { type: 'Branch', id: 'LIST' },
+        ]
+      },
+    }),
   }),
 })
 
@@ -83,5 +199,11 @@ export const {
   useGetEntitiesQuery,
   useGetSnapshotQuery,
   useBatchCommitMutation,
+  useGetHistoryQuery,
+  useGetSnapshotByCommitQuery,
+  useGetBranchesQuery,
+  useCreateBranchMutation,
+  useRevertMutation,
+  useMergeMutation,
 } = ubosApi
 

@@ -1,7 +1,12 @@
-import { UBOSStudio } from "./components/UBOSStudio"
+import { ThemeProvider } from './contexts/ThemeContext'
+import { UbosStudioLayout } from './components/UbosStudioLayout'
 
 function App() {
-  return <UBOSStudio />
+  return (
+    <ThemeProvider>
+      <UbosStudioLayout />
+    </ThemeProvider>
+  )
 }
 
 export default App

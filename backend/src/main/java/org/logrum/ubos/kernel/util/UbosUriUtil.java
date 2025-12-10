@@ -7,46 +7,73 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Utility class for parsing and building UBOS URIs.
+ * Utility class for parsing and building canonical UBOS URIs.
  * <p>
- * UBOS URI Format: {@code ubos://<type>/<slug>?branch=<branch>&commitId=<commitId>}
+ * The UBOS URI format follows the pattern: {@code ubos://type/slug?branch=name&cid=commit_id}
+ * <p>
+ * Components:
+ * <ul>
+ *   <li><b>Scheme:</b> Always {@code ubos}</li>
+ *   <li><b>Type:</b> The entity type (e.g., "logic", "type", "data")</li>
+ *   <li><b>Slug:</b> The unique identifier for the entity</li>
+ *   <li><b>Branch:</b> Optional query parameter, defaults to "master"</li>
+ *   <li><b>Commit ID (cid):</b> Optional query parameter for time-travel queries</li>
+ * </ul>
  * <p>
  * Examples:
  * <ul>
  *   <li>{@code ubos://logic/tax-calc?branch=master}</li>
- *   <li>{@code ubos://type/user-profile?branch=development&commitId=12345}</li>
+ *   <li>{@code ubos://type/user-profile?branch=development&cid=12345}</li>
+ *   <li>{@code ubos://data/order-001}</li>
  * </ul>
+ *
+ * @author UBOS Kernel Team
+ * @since 1.0
  */
 public final class UbosUriUtil {
 
+    /** The required URI scheme for UBOS resources. */
     private static final String UBOS_SCHEME = "ubos";
-    private static final String DEFAULT_BRANCH = "master";
-    private static final String PARAM_BRANCH = "branch";
-    private static final String PARAM_COMMIT_ID = "commitId";
 
+    /** The default branch name when not specified. */
+    private static final String DEFAULT_BRANCH = "master";
+
+    /** Query parameter key for branch. */
+    private static final String PARAM_BRANCH = "branch";
+
+    /** Query parameter key for commit ID (time travel). */
+    private static final String PARAM_CID = "cid";
+
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
     private UbosUriUtil() {
-        // Utility class - prevent instantiation
+        throw new UnsupportedOperationException("Utility class cannot be instantiated");
     }
 
     /**
-     * Holds the parsed components of a UBOS URI.
+     * Data transfer object holding the parsed components of a UBOS URI.
+     * <p>
+     * This record provides immutable storage for all URI components with built-in
+     * validation in the compact constructor.
      *
-     * @param type     the entity type (e.g., "logic", "type", "data")
-     * @param slug     the entity slug identifier
-     * @param branch   the branch name (defaults to "master" if not specified)
-     * @param commitId the optional commit ID for retrieving a specific version
+     * @param type     the entity type (e.g., "logic", "type", "data"), never null or blank
+     * @param slug     the entity slug identifier, never null or blank
+     * @param branch   the branch name, defaults to "master" if null or blank
+     * @param commitId the optional commit ID for time-travel queries, may be null
      */
     public record UbosUriDetails(
-            String type,
-            String slug,
-            String branch,
-            Optional<Long> commitId
+        String type,
+        String slug,
+        String branch,
+        Long commitId
     ) {
         /**
-         * Compact constructor with validation.
+         * Compact constructor with validation and default value assignment.
+         *
+         * @throws IllegalArgumentException if type or slug is null or blank
          */
         public UbosUriDetails {
             if (type == null || type.isBlank()) {
@@ -58,25 +85,57 @@ public final class UbosUriUtil {
             if (branch == null || branch.isBlank()) {
                 branch = DEFAULT_BRANCH;
             }
-            if (commitId == null) {
-                commitId = Optional.empty();
-            }
+            // commitId can be null (optional for time travel)
         }
 
         /**
-         * Convenience constructor without commitId.
+         * Convenience constructor without commit ID.
+         *
+         * @param type   the entity type
+         * @param slug   the entity slug identifier
+         * @param branch the branch name
          */
         public UbosUriDetails(String type, String slug, String branch) {
-            this(type, slug, branch, Optional.empty());
+            this(type, slug, branch, null);
+        }
+
+        /**
+         * Checks if this URI details has a specific commit ID for time travel.
+         *
+         * @return true if a commit ID is present, false otherwise
+         */
+        public boolean hasCommitId() {
+            return commitId != null;
+        }
+
+        /**
+         * Builds the URI string representation of this details object.
+         *
+         * @return the canonical UBOS URI string
+         */
+        public String toUriString() {
+            return commitId != null
+                ? UbosUriUtil.build(type, slug, branch, commitId)
+                : UbosUriUtil.build(type, slug, branch);
         }
     }
 
     /**
      * Parses a UBOS URI string into its component parts.
+     * <p>
+     * The URI must follow the format: {@code ubos://type/slug?branch=name&cid=commit_id}
+     * <p>
+     * Parsing rules:
+     * <ul>
+     *   <li>Scheme must be exactly "ubos" (case-insensitive)</li>
+     *   <li>Path must contain at least two segments: type and slug</li>
+     *   <li>Branch defaults to "master" if not provided</li>
+     *   <li>Commit ID (cid) is optional</li>
+     * </ul>
      *
-     * @param uriString the full UBOS URI (e.g., "ubos://logic/tax-calc?branch=master")
+     * @param uriString the full UBOS URI string to parse
      * @return a {@link UbosUriDetails} record containing the parsed components
-     * @throws UbosUriParseException if the URI format is invalid or scheme is not "ubos://"
+     * @throws UbosUriParseException if the URI is null, blank, malformed, or has an invalid scheme
      */
     public static UbosUriDetails parse(String uriString) {
         if (uriString == null || uriString.isBlank()) {
@@ -90,65 +149,89 @@ public final class UbosUriUtil {
             throw new UbosUriParseException("Invalid URI syntax: " + uriString, e);
         }
 
-        // Validate scheme
+        // Validate scheme - must be exactly "ubos"
         var scheme = uri.getScheme();
         if (scheme == null || !UBOS_SCHEME.equalsIgnoreCase(scheme)) {
             throw new UbosUriParseException(
-                    "Invalid scheme: expected 'ubos://' but got '" + scheme + "://' in URI: " + uriString
+                "Invalid scheme: expected 'ubos' but got '" + scheme + "' in URI: " + uriString
             );
         }
 
-        // Extract type from host
-        var type = uri.getHost();
-        if (type == null || type.isBlank()) {
-            throw new UbosUriParseException("Missing entity type in URI: " + uriString);
+        // Extract and validate path segments (type and slug)
+        var path = uri.getPath();
+        if (path == null || path.isBlank()) {
+            // If path is empty, check if host contains the path info (ubos://type/slug format)
+            var host = uri.getHost();
+            path = uri.getPath();
+            if (host != null && path != null) {
+                path = "/" + host + path;
+            } else {
+                throw new UbosUriParseException("Missing path in URI: " + uriString);
+            }
         }
 
-        // Extract slug from path
-        var path = uri.getPath();
-        if (path == null || path.isBlank() || "/".equals(path)) {
-            throw new UbosUriParseException("Missing slug in URI path: " + uriString);
+        // Handle the authority part for ubos://type/slug format
+        var fullPath = path;
+        if (uri.getHost() != null) {
+            fullPath = "/" + uri.getHost() + path;
         }
-        // Remove leading slash
-        var slug = path.startsWith("/") ? path.substring(1) : path;
+
+        // Remove leading slash and split path into segments
+        var cleanPath = fullPath.startsWith("/") ? fullPath.substring(1) : fullPath;
+        var segments = cleanPath.split("/");
+
+        if (segments.length < 2) {
+            throw new UbosUriParseException(
+                "Path must contain type and slug (e.g., /logic/tax-calc), got: " + fullPath
+            );
+        }
+
+        var type = URLDecoder.decode(segments[0], StandardCharsets.UTF_8);
+        var slug = URLDecoder.decode(segments[1], StandardCharsets.UTF_8);
+
+        if (type.isBlank()) {
+            throw new UbosUriParseException("Type cannot be blank in URI: " + uriString);
+        }
         if (slug.isBlank()) {
             throw new UbosUriParseException("Slug cannot be blank in URI: " + uriString);
         }
-        // URL decode the slug
-        slug = URLDecoder.decode(slug, StandardCharsets.UTF_8);
 
         // Parse query parameters
         var queryParams = parseQueryParams(uri.getRawQuery());
 
+        // Extract branch with default fallback
         var branch = queryParams.getOrDefault(PARAM_BRANCH, DEFAULT_BRANCH);
         if (branch.isBlank()) {
             branch = DEFAULT_BRANCH;
         }
 
-        Optional<Long> commitId = Optional.empty();
-        var commitIdStr = queryParams.get(PARAM_COMMIT_ID);
-        if (commitIdStr != null && !commitIdStr.isBlank()) {
+        // Extract optional commit ID
+        Long commitId = null;
+        var cidStr = queryParams.get(PARAM_CID);
+        if (cidStr != null && !cidStr.isBlank()) {
             try {
-                commitId = Optional.of(Long.parseLong(commitIdStr));
+                commitId = Long.parseLong(cidStr);
             } catch (NumberFormatException e) {
                 throw new UbosUriParseException(
-                        "Invalid commitId format: expected a number but got '" + commitIdStr + "' in URI: " + uriString,
-                        e
+                    "Invalid commit ID format: expected a number but got '" + cidStr + "' in URI: " + uriString,
+                    e
                 );
             }
         }
 
-        return new UbosUriDetails(type.toUpperCase(), slug, branch, commitId);
+        return new UbosUriDetails(type.toLowerCase(), slug, branch, commitId);
     }
 
     /**
      * Builds a UBOS URI string from the given components.
+     * <p>
+     * Constructs a URI in the format: {@code ubos://type/slug?branch=name}
      *
      * @param type   the entity type (e.g., "logic", "type")
      * @param slug   the entity slug identifier
-     * @param branch the branch name
-     * @return the constructed URI string (e.g., "ubos://logic/tax-calc?branch=master")
-     * @throws IllegalArgumentException if type, slug, or branch is null or blank
+     * @param branch the branch name (defaults to "master" if null or blank)
+     * @return the constructed canonical URI string
+     * @throws IllegalArgumentException if type or slug is null or blank
      */
     public static String build(String type, String slug, String branch) {
         if (type == null || type.isBlank()) {
@@ -161,37 +244,47 @@ public final class UbosUriUtil {
             branch = DEFAULT_BRANCH;
         }
 
+        var encodedType = URLEncoder.encode(type.toLowerCase(), StandardCharsets.UTF_8);
         var encodedSlug = URLEncoder.encode(slug, StandardCharsets.UTF_8)
-                .replace("+", "%20"); // Spaces should be %20, not +
+            .replace("+", "%20"); // Spaces should be %20, not +
+        var encodedBranch = URLEncoder.encode(branch, StandardCharsets.UTF_8);
 
         return String.format("%s://%s/%s?%s=%s",
-                UBOS_SCHEME,
-                type.toLowerCase(),
-                encodedSlug,
-                PARAM_BRANCH,
-                URLEncoder.encode(branch, StandardCharsets.UTF_8)
+            UBOS_SCHEME,
+            encodedType,
+            encodedSlug,
+            PARAM_BRANCH,
+            encodedBranch
         );
     }
 
     /**
-     * Builds a UBOS URI string including a specific commit ID.
+     * Builds a UBOS URI string including a specific commit ID for time travel.
+     * <p>
+     * Constructs a URI in the format: {@code ubos://type/slug?branch=name&cid=commit_id}
      *
      * @param type     the entity type
      * @param slug     the entity slug identifier
      * @param branch   the branch name
-     * @param commitId the specific commit ID
-     * @return the constructed URI string with commitId parameter
+     * @param commitId the specific commit ID (if null, omitted from URI)
+     * @return the constructed canonical URI string with optional commit ID
+     * @throws IllegalArgumentException if type or slug is null or blank
      */
     public static String build(String type, String slug, String branch, Long commitId) {
         var baseUri = build(type, slug, branch);
         if (commitId != null) {
-            return baseUri + "&" + PARAM_COMMIT_ID + "=" + commitId;
+            return baseUri + "&" + PARAM_CID + "=" + commitId;
         }
         return baseUri;
     }
 
     /**
-     * Parses a query string into a map of key-value pairs.
+     * Parses a raw query string into a map of key-value pairs.
+     * <p>
+     * Handles URL-encoded values and properly splits on '&amp;' delimiters.
+     *
+     * @param query the raw query string (may be null)
+     * @return a map of parameter names to values, empty if query is null or blank
      */
     private static Map<String, String> parseQueryParams(String query) {
         var params = new HashMap<String, String>();
@@ -204,11 +297,39 @@ public final class UbosUriUtil {
             if (idx > 0) {
                 var key = URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8);
                 var value = idx < pair.length() - 1
-                        ? URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8)
-                        : "";
+                    ? URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8)
+                    : "";
                 params.put(key, value);
             }
         }
         return params;
+    }
+
+    /**
+     * Custom runtime exception thrown when a UBOS URI cannot be parsed.
+     * <p>
+     * This exception indicates that the provided URI string does not conform
+     * to the expected UBOS URI format.
+     */
+    public static class UbosUriParseException extends RuntimeException {
+
+        /**
+         * Constructs a new parse exception with the specified detail message.
+         *
+         * @param message the detail message explaining the parse failure
+         */
+        public UbosUriParseException(String message) {
+            super(message);
+        }
+
+        /**
+         * Constructs a new parse exception with the specified detail message and cause.
+         *
+         * @param message the detail message explaining the parse failure
+         * @param cause   the underlying cause of the parse failure
+         */
+        public UbosUriParseException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

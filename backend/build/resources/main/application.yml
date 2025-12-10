@@ -3,7 +3,11 @@ server:
 
 spring:
   application:
-    name: ubos-platform
+    name: logrum-ubos-server
+  jackson:
+    property-naming-strategy: LOWER_CAMEL_CASE
+    serialization:
+      write-dates-as-timestamps: false
 
   # R2DBC 响应式数据库配置
   r2dbc:
@@ -26,9 +30,7 @@ spring:
 logging:
   level:
     # UBOS 内部逻辑跟踪 (方便查看我们自己写的 log.info/debug)
-    com.ubos: DEBUG
-
-    # --- 核心 SQL 跟踪 (查询语句和参数) ---
+    org.logrum.ubos: DEBUG
 
     # 1. R2DBC 框架层面的数据绑定和语句执行
     org.springframework.r2dbc: DEBUG
@@ -52,7 +54,6 @@ management:
     web:
       exposure:
         include: "*"
-
 
 ubos:
   genesis:

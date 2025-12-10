@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react'
-import { Table, Select, Button, Input, Space, Tag, message } from 'antd'
+import { Table, Button, Input, Space, Tag, message, theme, Typography, Badge } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useGetEntitiesQuery, useBatchCommitMutation } from '../store/ubosApi'
 import type { EntityInstance } from '../types/ubos'
-import { SendOutlined } from '@ant-design/icons'
+import { SendOutlined, SearchOutlined } from '@ant-design/icons'
+import { buildUbosUri } from '../utils/ubosUri'
+import { Copy, CheckCircle2 } from 'lucide-react'
 
+const { Text } = Typography
 const { Search } = Input
 
 interface EntityManagerProps {
@@ -13,20 +16,33 @@ interface EntityManagerProps {
   currentBranch?: string
   onBranchChange?: (branch: string) => void
   editedSnapshotData?: Record<string, string>
+  entityTypeFilter?: string
 }
 
 export function EntityManager({
   selectedEntity,
   onRowSelect,
   currentBranch: externalBranch,
-  onBranchChange: externalBranchChange,
   editedSnapshotData = {},
+  entityTypeFilter,
 }: EntityManagerProps) {
-  const [internalBranch, setInternalBranch] = useState('master')
+  const {
+    token: {
+      colorBgContainer,
+      colorBgElevated,
+      colorText,
+      colorTextSecondary,
+      colorBorder,
+      colorPrimary,
+      borderRadius,
+    },
+  } = theme.useToken()
+
+  const [internalBranch] = useState('master')
   const currentBranch = externalBranch ?? internalBranch
-  const setCurrentBranch = externalBranchChange ?? setInternalBranch
   const [searchText, setSearchText] = useState('')
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [copiedUri, setCopiedUri] = useState<string | null>(null)
 
   // RTK Query hooks
   const {
@@ -36,6 +52,7 @@ export function EntityManager({
   } = useGetEntitiesQuery({
     branch: currentBranch,
     search: searchText || undefined,
+    type: entityTypeFilter,
   })
 
   const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
@@ -47,34 +64,104 @@ export function EntityManager({
         title: 'ID',
         dataIndex: 'id',
         key: 'id',
-        width: 200,
+        width: 180,
         render: (text: string) => (
-          <span className="font-mono text-xs">{text}</span>
+          <Text
+            style={{
+              fontFamily: '"SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace',
+              fontSize: '12px',
+              color: colorTextSecondary,
+            }}
+          >
+            {text}
+          </Text>
         ),
       },
       {
         title: 'Slug',
         dataIndex: 'slug',
         key: 'slug',
-        render: (text: string) => <span className="font-medium">{text}</span>,
+        render: (text: string) => (
+          <Text style={{ fontWeight: 500, color: colorText }}>{text}</Text>
+        ),
       },
       {
         title: 'Type',
         dataIndex: 'entityType',
         key: 'entityType',
+        width: 120,
         render: (type: string) => (
-          <Tag color="blue">{type}</Tag>
+          <Tag
+            color="blue"
+            style={{
+              margin: 0,
+              borderRadius: borderRadius,
+              border: `1px solid rgba(74, 158, 255, 0.3)`,
+              background: 'rgba(74, 158, 255, 0.1)',
+              color: colorPrimary,
+              fontWeight: 500,
+            }}
+          >
+            {type}
+          </Tag>
         ),
+      },
+      {
+        title: 'UBOS URI',
+        key: 'ubosUri',
+        width: 380,
+        render: (_: any, record: EntityInstance) => {
+          const uri = buildUbosUri(record, currentBranch)
+          const isCopied = copiedUri === uri
+          return (
+            <Space
+              style={{
+                fontFamily: '"SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace',
+                fontSize: '12px',
+                color: colorTextSecondary,
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderRadius: borderRadius,
+                background: isCopied ? 'rgba(74, 158, 255, 0.1)' : 'transparent',
+                border: isCopied ? `1px solid ${colorPrimary}` : '1px solid transparent',
+                transition: 'all 0.2s',
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                navigator.clipboard.writeText(uri)
+                setCopiedUri(uri)
+                message.success('URI copied', 1)
+                setTimeout(() => setCopiedUri(null), 2000)
+              }}
+              title="Click to copy"
+            >
+              {isCopied ? <CheckCircle2 size={14} color={colorPrimary} /> : <Copy size={14} />}
+              <Text
+                style={{
+                  color: isCopied ? colorPrimary : colorTextSecondary,
+                  fontFamily: 'inherit',
+                  fontSize: 'inherit',
+                }}
+              >
+                {uri}
+              </Text>
+            </Space>
+          )
+        },
       },
       {
         title: 'Created At',
         dataIndex: 'createdAt',
         key: 'createdAt',
-        render: (date: string) =>
-          date ? new Date(date).toLocaleString() : '-',
+        width: 180,
+        render: (date: string) => (
+          <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
+            {date ? new Date(date).toLocaleString() : '-'}
+          </Text>
+        ),
       },
     ],
-    []
+    [currentBranch, copiedUri, colorText, colorTextSecondary, colorPrimary, borderRadius]
   )
 
   // Handle row selection
@@ -151,54 +238,67 @@ export function EntityManager({
     setSearchText(value)
   }
 
-  // Branch options
-  const branchOptions = [
-    { value: 'master', label: 'Master' },
-    { value: 'beijing', label: 'Beijing' },
-    { value: 'shanghai', label: 'Shanghai' },
-    { value: 'development', label: 'Development' },
-  ]
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="border-b border-border p-3 bg-card">
-        <Space className="w-full" direction="vertical" size="small">
-          <Space className="w-full justify-between">
-            <Space>
-              <Select
-                value={currentBranch}
-                onChange={setCurrentBranch}
-                style={{ width: 150 }}
-                options={branchOptions}
-              />
-              <Search
-                placeholder="Search entities..."
-                allowClear
-                onSearch={handleSearch}
-                style={{ width: 300 }}
-                enterButton
-              />
-            </Space>
-            {selectedRowKeys.length > 0 && (
-              <Button
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={handleBatchCommit}
-                loading={isCommitting}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
+      {/* Toolbar - Enhanced */}
+      <div
+        style={{
+          padding: '16px 20px',
+          borderBottom: `1px solid ${colorBorder}`,
+          background: `linear-gradient(180deg, ${colorBgElevated} 0%, ${colorBgContainer} 100%)`,
+        }}
+      >
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space size="middle">
+            <Search
+              placeholder="Search entities by slug, type, or ID..."
+              allowClear
+              onSearch={handleSearch}
+              style={{ width: 360 }}
+              enterButton={<SearchOutlined />}
+              size="middle"
+            />
+            {entities.length > 0 && (
+              <Badge
+                count={entities.length}
+                style={{
+                  backgroundColor: colorPrimary,
+                }}
               >
-                Batch Commit ({selectedRowKeys.length})
-              </Button>
+                <Text style={{ color: colorTextSecondary, fontSize: '13px' }}>
+                  Entities
+                </Text>
+              </Badge>
             )}
           </Space>
+          {selectedRowKeys.length > 0 && (
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={handleBatchCommit}
+              loading={isCommitting}
+              style={{
+                fontWeight: 500,
+                boxShadow: `0 2px 8px rgba(74, 158, 255, 0.3)`,
+              }}
+            >
+              Batch Commit ({selectedRowKeys.length})
+            </Button>
+          )}
         </Space>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
+      {/* Table - Enhanced */}
+      <div style={{ flex: 1, overflow: 'auto' }}>
         {error && (
-          <div className="p-4 text-destructive">
-            Error loading entities: {JSON.stringify(error)}
+          <div
+            style={{
+              padding: '24px',
+              textAlign: 'center',
+              color: '#F85149',
+            }}
+          >
+            <Text type="danger">Error loading entities: {JSON.stringify(error)}</Text>
           </div>
         )}
         <Table
@@ -210,17 +310,42 @@ export function EntityManager({
           pagination={{
             pageSize: 50,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} entities`,
+            showTotal: (total) => (
+              <Text style={{ color: colorTextSecondary }}>
+                Total <Text strong style={{ color: colorText }}>{total}</Text> entities
+              </Text>
+            ),
+            style: { padding: '16px 20px' },
           }}
           onRow={(record) => ({
             onClick: () => {
               onRowSelect(record)
               setSelectedRowKeys([record.id])
             },
-            className:
-              selectedEntity?.id === record.id ? 'bg-primary/10' : '',
+            style: {
+              cursor: 'pointer',
+              background:
+                selectedEntity?.id === record.id
+                  ? 'rgba(74, 158, 255, 0.1)'
+                  : 'transparent',
+              borderLeft:
+                selectedEntity?.id === record.id
+                  ? `3px solid ${colorPrimary}`
+                  : '3px solid transparent',
+            },
+            onMouseEnter: (e) => {
+              if (selectedEntity?.id !== record.id) {
+                e.currentTarget.style.background = colorBgElevated
+              }
+            },
+            onMouseLeave: (e) => {
+              if (selectedEntity?.id !== record.id) {
+                e.currentTarget.style.background = 'transparent'
+              }
+            },
           })}
-          scroll={{ y: 'calc(100vh - 200px)' }}
+          scroll={{ y: 'calc(100vh - 280px)' }}
+          size="middle"
         />
       </div>
     </div>
