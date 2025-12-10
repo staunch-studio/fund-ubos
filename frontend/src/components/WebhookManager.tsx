@@ -1,52 +1,105 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Table, Button, Space, Tag, Typography, theme, Popconfirm, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Webhook, Plus, Edit, Trash2, Calendar, ExternalLink } from 'lucide-react'
-import { useGetWebhooksQuery, useDeleteWebhookMutation } from '../store/ubosApi'
+import { useGetEntitiesQuery, useBatchCommitMutation } from '../store/ubosApi'
 import { WebhookEditModal } from './WebhookEditModal'
-import type { WebhookConfig } from '../types/ubos'
+import type { EntityInstance } from '../types/ubos'
+import { formatWebhookToSnapshotData, entityToWebhook, type WebhookData } from '../utils/entityHelpers'
 
 const { Text } = Typography
 
 interface WebhookManagerProps {
   availableEntityTypes?: string[]
+  currentBranch: string
 }
 
-export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA', 'CONFIG', 'UserProfile', 'Product', 'Order'] }: WebhookManagerProps) {
+export function WebhookManager({ 
+  availableEntityTypes = ['LOGIC', 'VIEW', 'DATA', 'CONFIG', 'UserProfile', 'Product', 'Order'],
+  currentBranch,
+}: WebhookManagerProps) {
   const {
     token: { colorText, colorTextSecondary, colorBorder, colorPrimary, colorBgContainer, colorError },
   } = theme.useToken()
 
   const [editModalOpen, setEditModalOpen] = useState(false)
-  const [editingWebhook, setEditingWebhook] = useState<WebhookConfig | null>(null)
+  const [editingWebhookId, setEditingWebhookId] = useState<string | null>(null)
+  const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
 
-  // Fetch webhooks
+  // Fetch all WEBHOOK entities
   const {
-    data: webhooks = [],
+    data: webhookEntities = [],
     isLoading: isLoadingWebhooks,
     refetch: refetchWebhooks,
-  } = useGetWebhooksQuery()
+  } = useGetEntitiesQuery({
+    branch: currentBranch,
+    type: 'WEBHOOK',
+  })
 
-  const [deleteWebhook, { isLoading: isDeleting }] = useDeleteWebhookMutation()
+  // For simplicity, we'll use entity metadata for display
+  // In production, you might want to fetch snapshots on-demand or implement pagination
+  const finalWebhooks = useMemo(() => {
+    return webhookEntities.map((entity) => {
+      const partial = entityToWebhook(entity)
+      return {
+        entity,
+        data: {
+          hookId: partial.hookId || entity.slug,
+          hookName: entity.slug, // Use slug as name for now
+          entityType: '', // Will be loaded from snapshot when needed
+          triggerEvent: 'COMMIT' as const,
+          targetUrl: '',
+          isActive: true,
+          createdAt: partial.createdAt || entity.createdAt,
+        } as WebhookData,
+      }
+    })
+  }, [webhookEntities])
 
-  const handleCreate = () => {
-    setEditingWebhook(null)
-    setEditModalOpen(true)
-  }
-
-  const handleEdit = (webhook: WebhookConfig) => {
-    setEditingWebhook(webhook)
-    setEditModalOpen(true)
-  }
-
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (hookId: string) => {
     try {
-      await deleteWebhook(id).unwrap()
+      const webhookData = finalWebhooks.find((w) => w.data.hookId === hookId)?.data
+      if (!webhookData) {
+        message.error('Webhook data not found')
+        return
+      }
+
+      // Delete by setting isActive to false
+      const updatedData: WebhookData = {
+        ...webhookData,
+        isActive: false,
+      }
+
+      const jsonPatch = JSON.stringify([
+        {
+          op: 'replace',
+          path: '/snapshotData',
+          value: formatWebhookToSnapshotData(updatedData),
+        },
+      ])
+
+      await batchCommit({
+        slugs: [hookId],
+        branch: currentBranch,
+        jsonPatch,
+        message: `Delete webhook ${webhookData.hookName}`,
+      }).unwrap()
+
       message.success('Webhook deleted successfully')
       refetchWebhooks()
     } catch (err: any) {
       message.error(err?.data?.message || 'Failed to delete webhook')
     }
+  }
+
+  const handleCreate = () => {
+    setEditingWebhookId(null)
+    setEditModalOpen(true)
+  }
+
+  const handleEdit = (webhookId: string) => {
+    setEditingWebhookId(webhookId)
+    setEditModalOpen(true)
   }
 
   const handleModalSuccess = () => {
@@ -66,24 +119,22 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
     }
   }
 
-  const columns: ColumnsType<WebhookConfig> = [
+  const columns: ColumnsType<{ entity: EntityInstance; data: WebhookData }> = [
     {
       title: 'Hook Name',
-      dataIndex: 'hookName',
       key: 'hookName',
-      render: (name: string) => (
+      render: (_, record) => (
         <Space>
           <Webhook size={16} color={colorPrimary} />
-          <Text style={{ fontWeight: 500, color: colorText }}>{name}</Text>
+          <Text style={{ fontWeight: 500, color: colorText }}>{record.data.hookName || record.data.hookId}</Text>
         </Space>
       ),
     },
     {
       title: 'Entity Type',
-      dataIndex: 'entityType',
       key: 'entityType',
       width: 120,
-      render: (type: string) => (
+      render: (_, record) => (
         <Tag
           style={{
             margin: 0,
@@ -93,27 +144,25 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
             color: colorText,
           }}
         >
-          {type}
+          {record.data.entityType}
         </Tag>
       ),
     },
     {
       title: 'Trigger Event',
-      dataIndex: 'triggerEvent',
       key: 'triggerEvent',
       width: 120,
-      render: (event: string) => (
-        <Tag color={getTriggerEventColor(event)} style={{ margin: 0 }}>
-          {event}
+      render: (_, record) => (
+        <Tag color={getTriggerEventColor(record.data.triggerEvent)} style={{ margin: 0 }}>
+          {record.data.triggerEvent}
         </Tag>
       ),
     },
     {
       title: 'Target URL',
-      dataIndex: 'targetUrl',
       key: 'targetUrl',
       ellipsis: true,
-      render: (url: string) => (
+      render: (_, record) => (
         <Space size="small">
           <ExternalLink size={14} color={colorTextSecondary} />
           <Text
@@ -122,24 +171,23 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
               fontSize: '12px',
               color: colorTextSecondary,
             }}
-            ellipsis={{ tooltip: url }}
+            ellipsis={{ tooltip: record.data.targetUrl }}
           >
-            {url}
+            {record.data.targetUrl}
           </Text>
         </Space>
       ),
     },
     {
       title: 'Last Triggered',
-      dataIndex: 'lastTriggered',
       key: 'lastTriggered',
       width: 180,
-      render: (time: string) =>
-        time ? (
+      render: (_, record) =>
+        record.data.lastTriggered ? (
           <Space size="small">
             <Calendar size={14} color={colorTextSecondary} />
             <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-              {new Date(time).toLocaleString()}
+              {new Date(record.data.lastTriggered).toLocaleString()}
             </Text>
           </Space>
         ) : (
@@ -151,21 +199,21 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
       key: 'actions',
       width: 150,
       fixed: 'right' as const,
-      render: (_, record: WebhookConfig) => (
+      render: (_, record) => (
         <Space size="small">
           <Button
             type="link"
             size="small"
             icon={<Edit size={14} />}
-            onClick={() => handleEdit(record)}
+            onClick={() => handleEdit(record.data.hookId)}
             style={{ padding: '0 8px' }}
           >
             Edit
           </Button>
           <Popconfirm
             title="Delete webhook"
-            description={`Are you sure you want to delete "${record.hookName}"?`}
-            onConfirm={() => record.id && handleDelete(record.id)}
+            description={`Are you sure you want to delete "${record.data.hookName}"?`}
+            onConfirm={() => handleDelete(record.data.hookId)}
             okText="Yes"
             cancelText="No"
             okButtonProps={{ danger: true }}
@@ -176,7 +224,7 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
               icon={<Trash2 size={14} />}
               danger
               style={{ padding: '0 8px' }}
-              loading={isDeleting}
+              loading={isCommitting}
             >
               Delete
             </Button>
@@ -205,7 +253,7 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
             Webhook Manager
           </Text>
           <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-            ({webhooks.length} webhooks)
+            ({finalWebhooks.length} webhooks)
           </Text>
         </Space>
         <Space>
@@ -228,7 +276,7 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
 
       {/* Table */}
       <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-        {webhooks.length === 0 && !isLoadingWebhooks ? (
+        {finalWebhooks.length === 0 && !isLoadingWebhooks ? (
           <div
             style={{
               padding: '48px',
@@ -247,9 +295,9 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
         ) : (
           <Table
             columns={columns}
-            dataSource={webhooks}
+            dataSource={finalWebhooks}
             loading={isLoadingWebhooks}
-            rowKey="id"
+            rowKey={(record) => record.entity.id}
             pagination={{
               pageSize: 20,
               showSizeChanger: true,
@@ -266,13 +314,14 @@ export function WebhookManager({ availableEntityTypes = ['LOGIC', 'VIEW', 'DATA'
         open={editModalOpen}
         onCancel={() => {
           setEditModalOpen(false)
-          setEditingWebhook(null)
+          setEditingWebhookId(null)
         }}
         onSuccess={handleModalSuccess}
-        webhook={editingWebhook}
+        webhookId={editingWebhookId}
+        webhookData={editingWebhookId ? finalWebhooks.find((w) => w.data.hookId === editingWebhookId)?.data : null}
+        currentBranch={currentBranch}
         availableEntityTypes={availableEntityTypes}
       />
     </div>
   )
 }
-

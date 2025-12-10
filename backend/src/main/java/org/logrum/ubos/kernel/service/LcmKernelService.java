@@ -42,17 +42,20 @@ public class LcmKernelService {
     private final DatabaseClient dbClient;
     private final ObjectMapper objectMapper;
     private final JsonSchemaValidator schemaValidator;
+    private final ApiKeyService apiKeyService;
+    private final WebhookService webhookService;
 
     private final Retry retryPolicy = ReactiveRetry.databaseTransientErrors();
 
     /**
-     * Initialize the schema validator with the schema fetcher.
-     * This breaks the circular dependency by setting the fetcher after construction.
+     * Initialize dependent services after construction.
      */
     @PostConstruct
-    public void initSchemaValidator() {
+    public void init() {
         schemaValidator.setSchemaFetcher(this::getResourceSnapshot);
-        log.info("📋 Schema validator initialized with kernel service");
+        apiKeyService.setKernelService(this);
+        webhookService.setKernelService(this);
+        log.info("📋 Kernel service initialized with schema validator, API key service, and webhook service");
     }
 
     /**

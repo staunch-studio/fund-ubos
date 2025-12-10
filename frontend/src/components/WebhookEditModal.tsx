@@ -1,16 +1,19 @@
 import { useState, useEffect } from 'react'
 import { Modal, Form, Input, Select, Button, Space, message, theme, Typography } from 'antd'
 import { Webhook, Save } from 'lucide-react'
-import { useSaveWebhookMutation } from '../store/ubosApi'
-import type { WebhookConfig } from '../types/ubos'
+import { useBatchCommitMutation } from '../store/ubosApi'
+import { formatWebhookToSnapshotData, type WebhookData } from '../utils/entityHelpers'
 
+const { TextArea } = Input
 const { Text } = Typography
 
 interface WebhookEditModalProps {
   open: boolean
   onCancel: () => void
   onSuccess?: () => void
-  webhook?: WebhookConfig | null // If provided, this is an edit operation
+  webhookId?: string | null // If provided, this is an edit operation
+  webhookData?: WebhookData | null // Existing webhook data for editing
+  currentBranch: string
   availableEntityTypes?: string[]
 }
 
@@ -18,7 +21,9 @@ export function WebhookEditModal({
   open,
   onCancel,
   onSuccess,
-  webhook,
+  webhookId,
+  webhookData,
+  currentBranch,
   availableEntityTypes = ['LOGIC', 'VIEW', 'DATA', 'CONFIG', 'UserProfile', 'Product', 'Order'],
 }: WebhookEditModalProps) {
   const {
@@ -26,38 +31,67 @@ export function WebhookEditModal({
   } = theme.useToken()
 
   const [form] = Form.useForm()
-  const [saveWebhook, { isLoading: isSaving }] = useSaveWebhookMutation()
+  const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
 
   useEffect(() => {
     if (open) {
-      if (webhook) {
+      if (webhookData && webhookId) {
         // Edit mode: populate form with existing data
         form.setFieldsValue({
-          hookName: webhook.hookName,
-          entityType: webhook.entityType,
-          triggerEvent: webhook.triggerEvent,
-          targetUrl: webhook.targetUrl,
+          hookName: webhookData.hookName,
+          entityType: webhookData.entityType,
+          triggerEvent: webhookData.triggerEvent,
+          targetUrl: webhookData.targetUrl,
         })
       } else {
         // Create mode: reset form
         form.resetFields()
       }
     }
-  }, [open, webhook, form])
+  }, [open, webhookData, webhookId, form])
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
       
-      await saveWebhook({
+      const hookId = webhookId || `webhook_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+      
+      // Create or update WebhookData
+      const webhookDataToSave: WebhookData = {
+        hookId: hookId,
         hookName: values.hookName,
         entityType: values.entityType,
         triggerEvent: values.triggerEvent,
         targetUrl: values.targetUrl,
+        isActive: webhookData?.isActive !== false, // Preserve existing state or default to true
+        createdAt: webhookData?.createdAt || new Date().toISOString(),
+        lastTriggered: webhookData?.lastTriggered,
+      }
+
+      // Format as snapshotData
+      const snapshotData = formatWebhookToSnapshotData(webhookDataToSave)
+
+      // Create JSON Patch
+      const jsonPatch = JSON.stringify([
+        {
+          op: 'replace',
+          path: '/snapshotData',
+          value: snapshotData,
+        },
+      ])
+
+      // Commit the webhook entity
+      await batchCommit({
+        slugs: [hookId],
+        branch: currentBranch,
+        jsonPatch,
+        message: webhookId 
+          ? `Update webhook: ${values.hookName}`
+          : `Create webhook: ${values.hookName}`,
       }).unwrap()
 
       message.success(
-        webhook
+        webhookId
           ? `Webhook "${values.hookName}" updated successfully`
           : `Webhook "${values.hookName}" created successfully`
       )
@@ -75,14 +109,14 @@ export function WebhookEditModal({
         <Space>
           <Webhook size={18} />
           <Text strong style={{ fontSize: '16px' }}>
-            {webhook ? 'Edit Webhook' : 'Create Webhook'}
+            {webhookId ? 'Edit Webhook' : 'Create Webhook'}
           </Text>
         </Space>
       }
       open={open}
       onCancel={onCancel}
       footer={[
-        <Button key="cancel" onClick={onCancel} disabled={isSaving}>
+        <Button key="cancel" onClick={onCancel} disabled={isCommitting}>
           Cancel
         </Button>,
         <Button
@@ -90,9 +124,9 @@ export function WebhookEditModal({
           type="primary"
           icon={<Save size={16} />}
           onClick={handleSubmit}
-          loading={isSaving}
+          loading={isCommitting}
         >
-          {webhook ? 'Update' : 'Create'}
+          {webhookId ? 'Update' : 'Create'}
         </Button>,
       ]}
       width={600}
@@ -205,10 +239,10 @@ export function WebhookEditModal({
           <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
             The webhook will be triggered when the selected event occurs for entities of the
             specified type. The target URL will receive a POST request with event details.
+            Changes will be committed to branch "{currentBranch}".
           </Text>
         </div>
       </Form>
     </Modal>
   )
 }
-
