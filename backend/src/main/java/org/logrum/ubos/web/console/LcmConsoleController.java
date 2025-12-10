@@ -14,6 +14,7 @@ import org.logrum.ubos.kernel.service.LcmKernelService;
 import org.logrum.ubos.kernel.util.JsonSchemaValidator;
 import org.logrum.ubos.kernel.util.SchemaValidationException;
 import org.logrum.ubos.kernel.util.UbosUriUtil;
+import org.logrum.ubos.kernel.util.UbosUriUtil.UbosUriDetails;
 import org.logrum.ubos.web.console.dto.BatchCommitRequest;
 import org.logrum.ubos.web.console.dto.BranchCreateRequest;
 import org.logrum.ubos.web.console.dto.BranchInfo;

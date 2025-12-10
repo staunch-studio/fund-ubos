@@ -62,21 +62,21 @@ export const ubosApi = createApi({
           : [{ type: 'Entity', id: 'LIST' }],
     }),
 
-    // GET /snapshot
-    // Uses ResourceContextRequest DTO (slug, type, branch)
+    // GET /snapshot?uri={ubosUri}
+    // Accepts a full UBOS URI string (e.g., "ubos://LOGIC/entity.slug?branch=master")
     // No transformResponse needed - backend returns Camel Case JSON directly
-    getSnapshot: builder.query<EntitySnapshot, ResourceContextRequest>({
-      query: (params) => ({
-        url: 'snapshot',
-        params: {
-          slug: params.slug,
-          type: params.type,
-          branch: params.branch,
-        },
-      }),
+    getSnapshot: builder.query<EntitySnapshot, string>({
+      query: (uri) => {
+        const searchParams = new URLSearchParams()
+        searchParams.append('uri', uri)
+        return {
+          url: 'snapshot',
+          params: searchParams,
+        }
+      },
       // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case
-      providesTags: (_result, _error, arg) => [
-        { type: 'Snapshot', id: `${arg.slug}-${arg.type}` },
+      providesTags: (_result, _error, uri) => [
+        { type: 'Snapshot', id: uri },
       ],
     }),
 

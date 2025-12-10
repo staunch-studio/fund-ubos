@@ -3,26 +3,22 @@ import Editor from '@monaco-editor/react'
 import { Tabs, theme, Typography } from 'antd'
 import type { TabsProps } from 'antd'
 import { useGetSnapshotQuery } from '../store/ubosApi'
-import type { EntityInstance } from '../types/ubos'
 import { FileCode, History, Loader2 } from 'lucide-react'
 import { HistoryViewer } from './HistoryViewer'
+import { parseUbosUri } from '../utils/useUbosUri'
 
 const { Text } = Typography
 
 interface SnapshotEditorProps {
-  entity: EntityInstance | null
-  branches: string[]
-  currentBranch: string
-  onBranchChange: (branch: string) => void
-  onCommit?: (snapshotData: string, commitMessage?: string) => void
-  onSnapshotChange?: (slug: string, data: string) => void
+  activeUri: string | null // Full UBOS URI string (e.g., "ubos://LOGIC/entity.slug?branch=master")
+  onSnapshotChange?: (uri: string, data: string) => void
   hideHeader?: boolean
 }
 
 export function SnapshotEditor({
-  entity,
-  currentBranch,
+  activeUri,
   onSnapshotChange,
+  hideHeader = false,
 }: SnapshotEditorProps) {
   const {
     token: { colorBgContainer, colorText, colorTextSecondary, colorBorder },
@@ -31,22 +27,17 @@ export function SnapshotEditor({
   const [editorValue, setEditorValue] = useState('')
   const [activeTab, setActiveTab] = useState('current')
 
-  // RTK Query - skip if no entity selected
-  // Uses ResourceContextRequest DTO
+  // Parse URI to extract context for HistoryViewer
+  const uriDetails = activeUri ? parseUbosUri(activeUri) : null
+
+  // Fetch snapshot using URI string
   const {
     data: snapshot,
     isLoading,
     error,
-  } = useGetSnapshotQuery(
-    {
-      slug: entity?.slug || '',
-      type: entity?.entityType || '',
-      branch: currentBranch,
-    },
-    {
-      skip: !entity?.slug || !entity?.entityType,
-    }
-  )
+  } = useGetSnapshotQuery(activeUri || '', {
+    skip: !activeUri,
+  })
 
   // Update editor value when snapshot data changes
   useEffect(() => {
@@ -59,22 +50,22 @@ export function SnapshotEditor({
         // If not valid JSON, use raw data
         setEditorValue(snapshot.snapshotData)
       }
-    } else if (entity && !snapshot) {
-      // Entity selected but no snapshot yet
+    } else if (activeUri && !snapshot) {
+      // URI selected but no snapshot yet
       setEditorValue('')
     }
-  }, [snapshot, entity])
+  }, [snapshot, activeUri])
 
   const handleEditorChange = (value: string | undefined) => {
     const newValue = value || ''
     setEditorValue(newValue)
     // Notify parent component of changes
-    if (entity?.slug && onSnapshotChange) {
-      onSnapshotChange(entity.slug, newValue)
+    if (activeUri && onSnapshotChange) {
+      onSnapshotChange(activeUri, newValue)
     }
   }
 
-  if (!entity) {
+  if (!activeUri) {
     return (
       <div
         style={{
@@ -88,10 +79,10 @@ export function SnapshotEditor({
       >
         <div style={{ textAlign: 'center' }}>
           <p style={{ fontSize: '16px', marginBottom: '8px', color: colorText }}>
-            No entity selected
+            No resource selected
           </p>
           <p style={{ fontSize: '13px' }}>
-            Select an entity from the grid to view and edit its snapshot data
+            Select a resource from the grid to view and edit its snapshot data
           </p>
         </div>
       </div>
@@ -188,7 +179,17 @@ export function SnapshotEditor({
       ),
       children: (
         <div style={{ height: 'calc(100vh - 200px)', minHeight: 400 }}>
-          <HistoryViewer entity={entity} currentBranch={currentBranch} />
+          {uriDetails ? (
+            <HistoryViewer
+              slug={uriDetails.slug}
+              entityType={uriDetails.type}
+              branch={uriDetails.branch}
+            />
+          ) : (
+            <div style={{ padding: '24px', textAlign: 'center', color: colorTextSecondary }}>
+              <Text>No URI context available</Text>
+            </div>
+          )}
         </div>
       ),
     },

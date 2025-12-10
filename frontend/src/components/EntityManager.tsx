@@ -4,23 +4,23 @@ import type { ColumnsType } from 'antd/es/table'
 import { useGetEntitiesQuery, useBatchCommitMutation } from '../store/ubosApi'
 import type { EntityInstance } from '../types/ubos'
 import { SendOutlined, SearchOutlined } from '@ant-design/icons'
-import { buildUbosUri } from '../utils/ubosUri'
+import { buildUbosUri, parseUbosUri } from '../utils/useUbosUri'
 import { Copy, CheckCircle2 } from 'lucide-react'
 
 const { Text } = Typography
 const { Search } = Input
 
 interface EntityManagerProps {
-  selectedEntity: EntityInstance | null
+  selectedEntityUri: string | null // Full UBOS URI string
   onRowSelect: (entity: EntityInstance | null) => void
   currentBranch?: string
   onBranchChange?: (branch: string) => void
-  editedSnapshotData?: Record<string, string>
+  editedSnapshotData?: Record<string, string> // Key: URI, Value: snapshotData
   entityTypeFilter?: string
 }
 
 export function EntityManager({
-  selectedEntity,
+  selectedEntityUri,
   onRowSelect,
   currentBranch: externalBranch,
   editedSnapshotData = {},
@@ -164,9 +164,24 @@ export function EntityManager({
     [currentBranch, copiedUri, colorText, colorTextSecondary, colorPrimary, borderRadius]
   )
 
+  // Parse selectedEntityUri to find matching entity
+  const selectedEntity = useMemo(() => {
+    if (!selectedEntityUri) return null
+    // Parse URI to extract slug and type
+    try {
+      const uriDetails = parseUbosUri(selectedEntityUri)
+      if (!uriDetails) return null
+      return entities.find(
+        (e) => e.slug === uriDetails.slug && e.entityType === uriDetails.type
+      ) || null
+    } catch {
+      return null
+    }
+  }, [selectedEntityUri, entities])
+
   // Handle row selection
   const rowSelection = {
-    selectedRowKeys,
+    selectedRowKeys: selectedEntity ? [selectedEntity.id] : [],
     onChange: (keys: React.Key[]) => {
       setSelectedRowKeys(keys)
     },

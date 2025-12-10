@@ -54,10 +54,10 @@ export function UbosStudioLayout({
     },
   } = theme.useToken()
 
-  const [selectedEntity, setSelectedEntity] = useState<EntityInstance | null>(null)
+  const [activeResourceUri, setActiveResourceUri] = useState<string | null>(null) // Store full UBOS URI
   const [currentBranch, setCurrentBranch] = useState('master')
   const [selectedEntityType, setSelectedEntityType] = useState<string | undefined>(undefined)
-  const [editedSnapshotData, setEditedSnapshotData] = useState<Record<string, string>>({})
+  const [editedSnapshotData, setEditedSnapshotData] = useState<Record<string, string>>({}) // Key: URI, Value: snapshotData
   const [commitMessage, setCommitMessage] = useState('')
   const [uriCopied, setUriCopied] = useState(false)
   const [branchModalOpen, setBranchModalOpen] = useState(false)
@@ -90,7 +90,8 @@ export function UbosStudioLayout({
 
   const handleBranchChange = (branch: string) => {
     setCurrentBranch(branch)
-    setSelectedEntity(null)
+    // Clear active URI when branch changes (URI contains branch info)
+    setActiveResourceUri(null)
     setEditedSnapshotData({})
   }
 
@@ -134,18 +135,25 @@ export function UbosStudioLayout({
   }
 
   const handleCommit = async () => {
-    if (!selectedEntity) {
-      message.warning('Please select an entity to commit')
+    if (!activeResourceUri) {
+      message.warning('Please select a resource to commit')
       return
     }
 
-    const snapshotData = editedSnapshotData[selectedEntity.slug]
+    const snapshotData = editedSnapshotData[activeResourceUri]
     if (!snapshotData) {
       message.warning('No changes detected')
       return
     }
 
     try {
+      // Parse URI to extract slug and branch for batchCommit
+      const uriDetails = parseUbosUri(activeResourceUri)
+      if (!uriDetails) {
+        message.error('Invalid URI format')
+        return
+      }
+
       const jsonPatch = JSON.stringify([
         {
           op: 'replace',
@@ -155,20 +163,20 @@ export function UbosStudioLayout({
       ])
 
       await batchCommit({
-        slugs: [selectedEntity.slug],
-        branch: currentBranch,
+        slugs: [uriDetails.slug],
+        branch: uriDetails.branch || currentBranch,
         jsonPatch,
-        message: commitMessage || `Update ${selectedEntity.slug}`,
+        message: commitMessage || `Update ${uriDetails.slug}`,
       }).unwrap()
 
       message.success({
-        content: `Successfully committed changes to ${selectedEntity.slug}`,
+        content: `Successfully committed changes to ${activeResourceUri}`,
         duration: 2,
       })
       setCommitMessage('')
       setEditedSnapshotData((prev) => {
         const updated = { ...prev }
-        delete updated[selectedEntity.slug]
+        delete updated[activeResourceUri]
         return updated
       })
     } catch (err: any) {
@@ -176,10 +184,10 @@ export function UbosStudioLayout({
     }
   }
 
-  const handleSnapshotChange = (slug: string, data: string) => {
+  const handleSnapshotChange = (uri: string, data: string) => {
     setEditedSnapshotData((prev) => ({
       ...prev,
-      [slug]: data,
+      [uri]: data,
     }))
   }
 
@@ -253,11 +261,9 @@ export function UbosStudioLayout({
     [entityTypes, selectedEntityType, activeView]
   )
 
-  const currentUri = selectedEntity
-    ? buildUbosUri(selectedEntity.entityType, selectedEntity.slug, currentBranch)
-    : ''
+  const currentUri = activeResourceUri || ''
 
-  const hasChanges = selectedEntity && editedSnapshotData[selectedEntity.slug]
+  const hasChanges = activeResourceUri && editedSnapshotData[activeResourceUri]
 
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden', background: '#010409' }}>
@@ -453,17 +459,25 @@ export function UbosStudioLayout({
               transition: 'all 0.2s ease',
             }}
           >
-            {/* Left Pane: Entity Grid */}
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
-              <EntityManager
-                selectedEntity={selectedEntity}
-                onRowSelect={setSelectedEntity}
-                currentBranch={currentBranch}
-                onBranchChange={handleBranchChange}
-                editedSnapshotData={editedSnapshotData}
-                entityTypeFilter={selectedEntityType}
-              />
-            </div>
+                      {/* Left Pane: Entity Grid */}
+                      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
+                        <EntityManager
+                          selectedEntityUri={activeResourceUri}
+                          onRowSelect={(entity) => {
+                            // Build URI from entity and current branch
+                            if (entity) {
+                              const uri = buildUbosUri(entity.entityType, entity.slug, currentBranch)
+                              setActiveResourceUri(uri)
+                            } else {
+                              setActiveResourceUri(null)
+                            }
+                          }}
+                          currentBranch={currentBranch}
+                          onBranchChange={handleBranchChange}
+                          editedSnapshotData={editedSnapshotData}
+                          entityTypeFilter={selectedEntityType}
+                        />
+                      </div>
 
             {/* Right Pane: Code Inspector - Enhanced */}
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>

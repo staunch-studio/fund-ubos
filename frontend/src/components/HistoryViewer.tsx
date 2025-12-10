@@ -2,18 +2,19 @@ import { useState, useMemo, useCallback } from 'react'
 import { Table, Checkbox, Space, Tag, Typography, theme, Badge, Button, Modal, Input, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useGetHistoryQuery, useGetSnapshotByCommitQuery, useRevertMutation } from '../store/ubosApi'
-import type { HistoryRecord, EntityInstance } from '../types/ubos'
+import type { HistoryRecord, ResourceContextRequest } from '../types/ubos'
 import { DiffViewer } from './DiffViewer'
 import { GitCommit, User, Calendar, MessageSquare, RotateCcw } from 'lucide-react'
 
 const { Text } = Typography
 
 interface HistoryViewerProps {
-  entity: EntityInstance | null
-  currentBranch: string
+  slug: string
+  entityType: string
+  branch: string
 }
 
-export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
+export function HistoryViewer({ slug, entityType, branch }: HistoryViewerProps) {
   const {
     token: { colorText, colorTextSecondary, colorBorder, colorPrimary, colorBgContainer },
   } = theme.useToken()
@@ -37,12 +38,12 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
     error: historyError,
   } = useGetHistoryQuery(
     {
-      slug: entity?.slug || '',
-      type: entity?.entityType || '',
-      branch: currentBranch,
-    },
+      slug: slug,
+      type: entityType,
+      branch: branch,
+    } as ResourceContextRequest,
     {
-      skip: !entity?.slug || !entity?.entityType,
+      skip: !slug || !entityType,
     }
   )
 
@@ -68,13 +69,13 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
     error: errorA,
   } = useGetSnapshotByCommitQuery(
     {
-      slug: entity?.slug || '',
-      type: entity?.entityType || '',
-      branch: currentBranch,
+      slug: slug,
+      type: entityType,
+      branch: branch,
       commitId: commitIdA || 0,
     },
     {
-      skip: !entity?.slug || !entity?.entityType || !commitIdA,
+      skip: !slug || !entityType || !commitIdA,
     }
   )
 
@@ -84,13 +85,13 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
     error: errorB,
   } = useGetSnapshotByCommitQuery(
     {
-      slug: entity?.slug || '',
-      type: entity?.entityType || '',
-      branch: currentBranch,
+      slug: slug,
+      type: entityType,
+      branch: branch,
       commitId: commitIdB || 0,
     },
     {
-      skip: !entity?.slug || !entity?.entityType || !commitIdB,
+      skip: !slug || !entityType || !commitIdB,
     }
   )
 
@@ -127,15 +128,15 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
   }, [])
 
   const handleRevertConfirm = async () => {
-    if (!entity || !revertCommitId) {
+    if (!slug || !entityType || !revertCommitId) {
       return
     }
 
     try {
       await revert({
-        slug: entity.slug,
-        type: entity.entityType, // Backend uses "type" not "entityType"
-        branch: currentBranch,
+        slug: slug,
+        type: entityType, // Backend uses "type" not "entityType"
+        branch: branch,
         commitId: revertCommitId,
         author: revertAuthor || undefined,
         message: revertMessage || undefined,
@@ -290,7 +291,7 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
     },
   ], [isChecked, handleCheckboxChange, handleRevertClick, selectedCommitIds.size, colorPrimary, colorText, colorBorder, colorTextSecondary])
 
-  if (!entity) {
+  if (!slug || !entityType) {
     return (
       <div
         style={{
@@ -302,8 +303,8 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
         }}
       >
         <div style={{ textAlign: 'center' }}>
-          <p style={{ fontSize: '16px', marginBottom: '8px' }}>No entity selected</p>
-          <p style={{ fontSize: '13px' }}>Select an entity to view its commit history</p>
+          <p style={{ fontSize: '16px', marginBottom: '8px' }}>No resource selected</p>
+          <p style={{ fontSize: '13px' }}>Select a resource to view its commit history</p>
         </div>
       </div>
     )
@@ -478,12 +479,12 @@ export function HistoryViewer({ entity, currentBranch }: HistoryViewerProps) {
         cancelText="Cancel"
         width={500}
       >
-        <div style={{ marginBottom: '16px' }}>
-          <Text style={{ color: colorTextSecondary }}>
-            This will revert the entity <Text strong style={{ color: colorText }}>{entity?.slug}</Text> to the state at commit{' '}
-            <Text strong style={{ color: colorPrimary }}>#{revertCommitId}</Text>.
-          </Text>
-        </div>
+                <div style={{ marginBottom: '16px' }}>
+                  <Text style={{ color: colorTextSecondary }}>
+                    This will revert the entity <Text strong style={{ color: colorText }}>{slug}</Text> to the state at commit{' '}
+                    <Text strong style={{ color: colorPrimary }}>#{revertCommitId}</Text>.
+                  </Text>
+                </div>
         <div style={{ marginBottom: '16px' }}>
           <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
             A new commit will be created with the reverted state. This action cannot be undone.
