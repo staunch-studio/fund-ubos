@@ -15,6 +15,10 @@ import type {
   RevertResponse,
   MergeRequest,
   MergeResponse,
+  SearchRequest,
+  SearchResult,
+  ProcessRecord,
+  ProcessDetail,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -29,7 +33,7 @@ export const ubosApi = createApi({
     baseUrl: '/api/console',
     // No Authorization headers - backend uses IP whitelisting
   }),
-  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch'],
+  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process'],
   endpoints: (builder) => ({
     // GET /entities
     getEntities: builder.query<EntityInstance[], GetEntitiesParams>({
@@ -192,6 +196,52 @@ export const ubosApi = createApi({
         ]
       },
     }),
+
+    // GET /search
+    search: builder.query<SearchResult[], SearchRequest>({
+      query: (params) => {
+        const searchParams = new URLSearchParams()
+        searchParams.append('query', params.query)
+        if (params.branch) {
+          searchParams.append('branch', params.branch)
+        }
+        if (params.type) {
+          searchParams.append('type', params.type)
+        }
+        return {
+          url: 'search',
+          params: searchParams,
+        }
+      },
+      providesTags: (_result, _error, arg) => [
+        { type: 'Search', id: arg.query },
+      ],
+    }),
+
+    // GET /process/recent
+    getRecentProcesses: builder.query<ProcessRecord[], { limit?: number }>({
+      query: (params) => {
+        const searchParams = new URLSearchParams()
+        if (params.limit) {
+          searchParams.append('limit', params.limit.toString())
+        }
+        return {
+          url: 'process/recent',
+          params: searchParams,
+        }
+      },
+      providesTags: [{ type: 'Process', id: 'RECENT' }],
+    }),
+
+    // GET /process/{processId}
+    getProcessDetail: builder.query<ProcessDetail, string>({
+      query: (processId) => ({
+        url: `process/${processId}`,
+      }),
+      providesTags: (_result, _error, processId) => [
+        { type: 'Process', id: processId },
+      ],
+    }),
   }),
 })
 
@@ -205,5 +255,9 @@ export const {
   useCreateBranchMutation,
   useRevertMutation,
   useMergeMutation,
+  useSearchQuery,
+  useLazySearchQuery,
+  useGetRecentProcessesQuery,
+  useGetProcessDetailQuery,
 } = ubosApi
 

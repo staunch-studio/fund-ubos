@@ -1,15 +1,18 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } from 'antd'
+const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
 import { BranchManagerModal } from './BranchManagerModal'
 import { BranchMergeModal } from './BranchMergeModal'
+import { SearchResultsModal } from './SearchResultsModal'
+import { ProcessLogViewer } from './ProcessLogViewer'
 import type { EntityInstance } from '../types/ubos'
-import { useBatchCommitMutation, useGetBranchesQuery } from '../store/ubosApi'
+import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery } from '../store/ubosApi'
 import { message } from 'antd'
 import { buildUbosUri } from '../utils/useUbosUri'
 import './UbosStudioLayout.css'
@@ -57,6 +60,11 @@ export function UbosStudioLayout({
   const [uriCopied, setUriCopied] = useState(false)
   const [branchModalOpen, setBranchModalOpen] = useState(false)
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchModalOpen, setSearchModalOpen] = useState(false)
+  const [activeView, setActiveView] = useState<'entities' | 'processLog'>('entities')
+  
+  const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
   const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
 
@@ -85,11 +93,36 @@ export function UbosStudioLayout({
   }
 
   const handleEntityTypeSelect: MenuProps['onClick'] = (e) => {
-    if (e.key === 'all') {
+    if (e.key === 'processLog') {
+      setActiveView('processLog')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'all') {
+      setActiveView('entities')
       setSelectedEntityType(undefined)
     } else {
+      setActiveView('entities')
       setSelectedEntityType(e.key)
     }
+  }
+
+  const handleSearch = (value: string) => {
+    if (!value.trim()) {
+      message.warning('Please enter a search query')
+      return
+    }
+    setSearchQuery(value)
+    triggerSearch({
+      query: value.trim(),
+      branch: currentBranch,
+    })
+    setSearchModalOpen(true)
+  }
+
+  const handleSearchResultClick = (result: any) => {
+    // Find the entity and select it
+    // This would require additional logic to load the entity
+    setSearchModalOpen(false)
+    message.info(`Selected: ${result.slug}`)
   }
 
   const handleCommit = async () => {
@@ -158,7 +191,7 @@ export function UbosStudioLayout({
         key: 'all',
         icon: <Database size={18} />,
         label: (
-          <span style={{ fontWeight: selectedEntityType === undefined ? 500 : 400 }}>
+          <span style={{ fontWeight: activeView === 'entities' && selectedEntityType === undefined ? 500 : 400 }}>
             All Entities
           </span>
         ),
@@ -170,13 +203,25 @@ export function UbosStudioLayout({
         key: type,
         icon: entityTypeIcons[type] || <Code size={18} />,
         label: (
-          <span style={{ fontWeight: selectedEntityType === type ? 500 : 400 }}>
+          <span style={{ fontWeight: activeView === 'entities' && selectedEntityType === type ? 500 : 400 }}>
             {type}
           </span>
         ),
       })),
+      {
+        type: 'divider' as const,
+      },
+      {
+        key: 'processLog',
+        icon: <FileText size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'processLog' ? 500 : 400 }}>
+            Process Log
+          </span>
+        ),
+      },
     ],
-    [entityTypes, selectedEntityType]
+    [entityTypes, selectedEntityType, activeView]
   )
 
   const currentUri = selectedEntity
@@ -200,7 +245,7 @@ export function UbosStudioLayout({
           boxShadow: '0 1px 0 rgba(255, 255, 255, 0.05)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
           <div
             style={{
               display: 'flex',
@@ -225,6 +270,14 @@ export function UbosStudioLayout({
               UBOS Studio
             </Text>
           </div>
+          <SearchInput
+            placeholder="Search entities, commits, branches..."
+            allowClear
+            onSearch={handleSearch}
+            style={{ width: 400, maxWidth: '100%' }}
+            enterButton={<Search size={16} />}
+            loading={isSearching}
+          />
         </div>
         <Space size="middle">
           <ThemeSelector />
@@ -314,12 +367,12 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              Entity Types
+              {activeView === 'processLog' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
             mode="inline"
-            selectedKeys={selectedEntityType ? [selectedEntityType] : ['all']}
+            selectedKeys={activeView === 'processLog' ? ['processLog'] : selectedEntityType ? [selectedEntityType] : ['all']}
             onClick={handleEntityTypeSelect}
             style={{
               height: 'calc(100% - 57px)',
@@ -339,6 +392,9 @@ export function UbosStudioLayout({
             position: 'relative',
           }}
         >
+          {activeView === 'processLog' ? (
+            <ProcessLogViewer />
+          ) : (
           <SplitPane
             split="vertical"
             minSize={320}
@@ -509,8 +565,19 @@ export function UbosStudioLayout({
               </div>
             </div>
           </SplitPane>
+          )}
         </Content>
       </Layout>
+
+      {/* Search Results Modal */}
+      <SearchResultsModal
+        open={searchModalOpen}
+        onCancel={() => setSearchModalOpen(false)}
+        results={searchResults}
+        isLoading={isSearching}
+        searchQuery={searchQuery}
+        onResultClick={handleSearchResultClick}
+      />
     </Layout>
   )
 }

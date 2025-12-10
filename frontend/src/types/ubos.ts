@@ -125,3 +125,49 @@ export interface MergeResponse {
   mergedSlugs: string[]; // List of successfully merged entity slugs
   message?: string;
 }
+
+// Search types
+export interface SearchRequest {
+  query: string; // Required: search query string
+  branch?: string; // Optional: filter by branch
+  type?: string; // Optional: filter by entity type
+}
+
+export interface SearchResult {
+  slug: string;
+  entityType: string;
+  branchName: string;
+  commitId?: number;
+  snippet?: string; // Optional: search result snippet
+}
+
+// Process Log types
+export interface ProcessRecord {
+  processId: string; // Required: unique process identifier
+  processName: string; // Required: name of the process
+  operator: string; // Required: operator/user who initiated the process
+  startTime: string; // Required: ISO String - process start time
+  endTime?: string; // Optional: ISO String - process end time
+  status?: string; // Optional: process status (e.g., "completed", "failed")
+  commitCount?: number; // Optional: number of commits in this process
+}
+
+export interface ProcessDetail {
+  processId: string;
+  processName: string;
+  operator: string;
+  startTime: string;
+  endTime?: string;
+  status?: string;
+  commits: ProcessCommit[]; // List of commits associated with this process
+}
+
+export interface ProcessCommit {
+  commitId: number;
+  slug: string;
+  entityType: string;
+  branchName: string;
+  message: string;
+  authorId: string;
+  createdAt: string; // ISO String
+}

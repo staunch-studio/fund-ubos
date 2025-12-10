@@ -23,6 +23,9 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import org.logrum.ubos.web.console.dto.CommitHistoryItem;
+import org.logrum.ubos.web.console.dto.ProcessDetailItem;
+import org.logrum.ubos.web.console.dto.ProcessLogItem;
+import org.logrum.ubos.web.console.dto.SearchResult;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -334,5 +337,114 @@ public class LcmConsoleController {
             })
             .onErrorResume(IllegalArgumentException.class, e ->
                 Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
+    }
+
+    // ==================== Search Endpoints ====================
+
+    /**
+     * 10. Global Search
+     * Purpose: Perform full-text search across entity snapshots using the search index.
+     * 
+     * Supports multiple search modes:
+     * - Full-text search against indexed property values
+     * - Slug pattern matching
+     * 
+     * @param query  the search query string (required)
+     * @param branch optional branch filter
+     * @param type   optional entity type filter
+     * @param mode   search mode: "fulltext" (default) or "slug"
+     * @param limit  maximum results (default 50, max 200)
+     */
+    @GetMapping("/search")
+    public Flux<SearchResult> search(
+            @RequestParam String query,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String type,
+            @RequestParam(defaultValue = "fulltext") String mode,
+            @RequestParam(defaultValue = "50") int limit) {
+
+        if (query == null || query.isBlank()) {
+            return Flux.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "query parameter is required"));
+        }
+
+        // Clamp limit to reasonable bounds
+        int effectiveLimit = Math.min(Math.max(limit, 1), 200);
+
+        log.debug("🔍 Search request: query='{}', branch='{}', type='{}', mode='{}', limit={}", 
+                 query, branch, type, mode, effectiveLimit);
+
+        if ("slug".equalsIgnoreCase(mode)) {
+            return kernelService.searchBySlug(query, branch, effectiveLimit)
+                .map(map -> new SearchResult(
+                    (String) map.get("entityId"),
+                    (String) map.get("entityType"),
+                    (String) map.get("slug"),
+                    (String) map.get("branchName"),
+                    (Long) map.get("commitId"),
+                    null, // no matched field for slug search
+                    null, // no matched value for slug search
+                    (String) map.get("snapshotData")
+                ));
+        }
+
+        // Default: full-text search
+        return kernelService.searchFullText(query, branch, type, effectiveLimit)
+            .map(SearchResult::fromMap);
+    }
+
+    // ==================== Process Log Endpoints ====================
+
+    /**
+     * 11. Get Recent Processes
+     * Purpose: Get a list of the 50 most recent batch operations.
+     */
+    @GetMapping("/process/recent")
+    public Flux<ProcessLogItem> getRecentProcesses() {
+        log.debug("Fetching recent processes");
+        return auditService.getRecentProcesses()
+            .map(ProcessLogItem::fromMap);
+    }
+
+    /**
+     * 12. Get Process Details
+     * Purpose: Get the details and all associated commits for a specific batch process.
+     * 
+     * @param processId the process ID to retrieve details for
+     */
+    @GetMapping("/process/{processId}")
+    public Mono<Map<String, Object>> getProcessDetails(@PathVariable String processId) {
+        if (processId == null || processId.isBlank()) {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "processId is required"));
+        }
+
+        log.debug("Fetching process details for processId={}", processId);
+
+        // Get process info and commits in parallel
+        Mono<ProcessLogItem> processInfoMono = auditService.getProcessInfo(processId)
+            .map(ProcessLogItem::fromMap)
+            .switchIfEmpty(Mono.error(new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Process not found: " + processId)));
+
+        Mono<List<ProcessDetailItem>> commitsMono = auditService.getProcessDetails(processId)
+            .map(ProcessDetailItem::fromMap)
+            .collectList();
+
+        return Mono.zip(processInfoMono, commitsMono)
+            .map(tuple -> {
+                ProcessLogItem processInfo = tuple.getT1();
+                List<ProcessDetailItem> commits = tuple.getT2();
+
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("processId", processInfo.processId());
+                result.put("processName", processInfo.processName());
+                result.put("operatorId", processInfo.operatorId());
+                result.put("startedAt", processInfo.startedAt());
+                result.put("commitCount", commits.size());
+                result.put("commits", commits);
+
+                return result;
+            });
     }
 }

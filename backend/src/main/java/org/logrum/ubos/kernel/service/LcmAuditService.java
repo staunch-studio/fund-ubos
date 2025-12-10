@@ -6,6 +6,7 @@ import org.logrum.ubos.kernel.util.ReactiveRetry;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.LocalDateTime;
@@ -25,6 +26,85 @@ public class LcmAuditService {
     private final DatabaseClient dbClient;
     
     private final Retry retryPolicy = ReactiveRetry.databaseTransientErrors();
+
+    /**
+     * Retrieves information about a specific process.
+     *
+     * @param processId the process ID to query
+     * @return a Mono containing process information, or empty if not found
+     */
+    public Mono<Map<String, Object>> getProcessInfo(String processId) {
+        String sql = """
+            SELECT process_id, process_name, operator_id, started_at
+            FROM lcm_process_commit_log
+            WHERE process_id = :processId
+        """;
+
+        return dbClient.sql(sql)
+            .bind("processId", processId)
+            .map((row, meta) -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("processId", row.get("process_id", String.class));
+                result.put("processName", row.get("process_name", String.class));
+                result.put("operatorId", row.get("operator_id", String.class));
+                result.put("startedAt", row.get("started_at", LocalDateTime.class));
+                return result;
+            })
+            .one()
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Counts the number of commits associated with a process.
+     *
+     * @param processId the process ID to query
+     * @return a Mono containing the commit count
+     */
+    public Mono<Long> getProcessCommitCount(String processId) {
+        String sql = """
+            SELECT COUNT(*) as count
+            FROM lcm_process_entity_map
+            WHERE process_id = :processId
+        """;
+
+        return dbClient.sql(sql)
+            .bind("processId", processId)
+            .map((row, meta) -> row.get("count", Long.class))
+            .one()
+            .defaultIfEmpty(0L)
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Retrieves processes filtered by operator.
+     *
+     * @param operatorId the operator ID to filter by
+     * @param limit      maximum number of results
+     * @return a Flux of maps containing process information
+     */
+    public Flux<Map<String, Object>> getProcessesByOperator(String operatorId, int limit) {
+        String sql = """
+            SELECT process_id, process_name, operator_id, started_at
+            FROM lcm_process_commit_log
+            WHERE operator_id = :operatorId
+            ORDER BY started_at DESC
+            LIMIT :limit
+        """;
+
+        return dbClient.sql(sql)
+            .bind("operatorId", operatorId)
+            .bind("limit", limit)
+            .map((row, meta) -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("processId", row.get("process_id", String.class));
+                result.put("processName", row.get("process_name", String.class));
+                result.put("operatorId", row.get("operator_id", String.class));
+                result.put("startedAt", row.get("started_at", LocalDateTime.class));
+                return result;
+            })
+            .all()
+            .retryWhen(retryPolicy);
+    }
 
     /**
      * Retrieves the most recent processes from the audit log.

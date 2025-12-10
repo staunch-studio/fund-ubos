@@ -143,6 +143,137 @@ public class LcmKernelService {
         }
     }
 
+    /**
+     * Perform full-text search across entity snapshots using the search index.
+     * 
+     * <p>This method searches the lcm_entity_search_index table for matches
+     * and returns entity information along with matched field details.
+     *
+     * @param query  the search query string (will be matched with LIKE)
+     * @param branch the branch to search in (optional, defaults to all branches if null)
+     * @param type   the entity type to filter by (optional, searches all types if null)
+     * @param limit  maximum number of results to return
+     * @return Flux of search result maps
+     */
+    public Flux<Map<String, Object>> searchFullText(String query, String branch, String type, int limit) {
+        log.debug("🔍 Full-text search: query='{}', branch='{}', type='{}', limit={}", 
+                 query, branch, type, limit);
+
+        // Build dynamic SQL based on provided filters
+        StringBuilder sqlBuilder = new StringBuilder("""
+            SELECT DISTINCT 
+                i.id as entity_id,
+                i.entity_type,
+                i.slug,
+                h.branch_name,
+                h.head_commit_id as commit_id,
+                idx.prop_name as matched_field,
+                idx.val_text as matched_value,
+                v.snapshot_data
+            FROM lcm_entity_search_index idx
+            JOIN lcm_entity_version_chain v ON idx.commit_id = v.commit_id
+            JOIN lcm_entity_instance i ON v.entity_id = i.id
+            JOIN lcm_entity_branch_head h ON i.id = h.entity_id AND h.head_commit_id = v.commit_id
+            WHERE idx.val_text ILIKE :queryPattern
+        """);
+
+        if (branch != null && !branch.isBlank()) {
+            sqlBuilder.append(" AND h.branch_name = :branch");
+        }
+        if (type != null && !type.isBlank()) {
+            sqlBuilder.append(" AND i.entity_type = :type");
+        }
+
+        sqlBuilder.append(" ORDER BY i.slug LIMIT :limit");
+
+        String sql = sqlBuilder.toString();
+        String queryPattern = "%" + query + "%";
+
+        var spec = dbClient.sql(sql)
+            .bind("queryPattern", queryPattern)
+            .bind("limit", limit);
+
+        if (branch != null && !branch.isBlank()) {
+            spec = spec.bind("branch", branch);
+        }
+        if (type != null && !type.isBlank()) {
+            spec = spec.bind("type", type.toUpperCase());
+        }
+
+        return spec
+            .map((row, meta) -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("entityId", row.get("entity_id", String.class));
+                result.put("entityType", row.get("entity_type", String.class));
+                result.put("slug", row.get("slug", String.class));
+                result.put("branchName", row.get("branch_name", String.class));
+                result.put("commitId", row.get("commit_id", Long.class));
+                result.put("matchedField", row.get("matched_field", String.class));
+                result.put("matchedValue", row.get("matched_value", String.class));
+                result.put("snapshotData", row.get("snapshot_data", String.class));
+                return result;
+            })
+            .all()
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Search entities by slug pattern using LIKE matching.
+     * 
+     * @param slugPattern the slug pattern to search for
+     * @param branch      the branch to search in (optional)
+     * @param limit       maximum number of results
+     * @return Flux of matching entity snapshots
+     */
+    public Flux<Map<String, Object>> searchBySlug(String slugPattern, String branch, int limit) {
+        log.debug("🔍 Slug search: pattern='{}', branch='{}', limit={}", slugPattern, branch, limit);
+
+        StringBuilder sqlBuilder = new StringBuilder("""
+            SELECT 
+                i.id as entity_id,
+                i.entity_type,
+                i.slug,
+                h.branch_name,
+                h.head_commit_id as commit_id,
+                v.snapshot_data
+            FROM lcm_entity_instance i
+            JOIN lcm_entity_branch_head h ON i.id = h.entity_id
+            JOIN lcm_entity_version_chain v ON h.head_commit_id = v.commit_id
+            WHERE i.slug ILIKE :slugPattern
+        """);
+
+        if (branch != null && !branch.isBlank()) {
+            sqlBuilder.append(" AND h.branch_name = :branch");
+        }
+
+        sqlBuilder.append(" ORDER BY i.slug LIMIT :limit");
+
+        String sql = sqlBuilder.toString();
+        String pattern = "%" + slugPattern + "%";
+
+        var spec = dbClient.sql(sql)
+            .bind("slugPattern", pattern)
+            .bind("limit", limit);
+
+        if (branch != null && !branch.isBlank()) {
+            spec = spec.bind("branch", branch);
+        }
+
+        return spec
+            .map((row, meta) -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("entityId", row.get("entity_id", String.class));
+                result.put("entityType", row.get("entity_type", String.class));
+                result.put("slug", row.get("slug", String.class));
+                result.put("branchName", row.get("branch_name", String.class));
+                result.put("commitId", row.get("commit_id", Long.class));
+                result.put("snapshotData", row.get("snapshot_data", String.class));
+                return result;
+            })
+            .all()
+            .retryWhen(retryPolicy);
+    }
+
     
     
     
