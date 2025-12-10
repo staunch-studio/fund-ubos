@@ -19,9 +19,6 @@ import type {
   SearchResult,
   ProcessRecord,
   ProcessDetail,
-  Environment,
-  SaveEnvironmentRequest,
-  SaveEnvironmentResponse,
   SchemaCommitRequest,
   SchemaCommitResponse,
 } from '../types/ubos'
@@ -248,29 +245,11 @@ export const ubosApi = createApi({
       ],
     }),
 
-    // GET /environments
-    getEnvironments: builder.query<Environment[], void>({
-      query: () => ({
-        url: 'environments',
-      }),
-      providesTags: [{ type: 'Environment', id: 'LIST' }],
-    }),
-
-    // POST /environment/save
-    saveEnvironment: builder.mutation<SaveEnvironmentResponse, SaveEnvironmentRequest>({
-      query: (body) => ({
-        url: 'environment/save',
-        method: 'POST',
-        body,
-      }),
-      invalidatesTags: (_result, error) => {
-        if (error) {
-          return []
-        }
-        // Invalidate environment list to trigger refresh
-        return [{ type: 'Environment', id: 'LIST' }]
-      },
-    }),
+    // Note: Environment management is now handled via standard entity queries
+    // GET /entities?type=ENVIRONMENT - use getEntitiesQuery with type='ENVIRONMENT'
+    // POST /batch-commit with type='ENVIRONMENT' - use batchCommitMutation
+    // The old /environments and /environment/save endpoints may still exist on the backend
+    // for backward compatibility, but the frontend now uses the standard entity commit flow
 
     // GET /snapshot?type=SCHEMA&slug={entityType}&branch={branch}
     // Uses ResourceContextRequest to fetch schema as a snapshot entity
@@ -323,8 +302,6 @@ export const {
   useLazySearchQuery,
   useGetRecentProcessesQuery,
   useGetProcessDetailQuery,
-  useGetEnvironmentsQuery,
-  useSaveEnvironmentMutation,
   useGetSchemaQuery,
   useCommitSchemaMutation,
 } = ubosApi

@@ -120,3 +120,54 @@ export function entityToWebhook(entity: EntityInstance): Partial<WebhookData> {
   }
 }
 
+// Environment entity structure (entityType='ENVIRONMENT')
+export interface EnvironmentData {
+  envName: string // Required: the environment name (e.g., "UAT", "PROD")
+  mappedBranch: string // Required: the default branch (defaults to "master")
+  mappedCommitId?: number | null // Optional: pin to a specific commit for stable testing
+  description?: string // Optional: description of the environment
+  updatedAt?: string // Optional: ISO String - timestamp of the last update (read-only, set by server)
+}
+
+/**
+ * Parse EnvironmentData from EntitySnapshot
+ */
+export function parseEnvironmentFromSnapshot(snapshot: EntitySnapshot): EnvironmentData | null {
+  try {
+    const data = JSON.parse(snapshot.snapshotData)
+    return {
+      envName: data.envName || snapshot.entityId,
+      mappedBranch: data.mappedBranch || 'master',
+      mappedCommitId: data.mappedCommitId || null,
+      description: data.description,
+      updatedAt: data.updatedAt || snapshot.createdAt || new Date().toISOString(),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Format EnvironmentData to JSON string for snapshotData
+ */
+export function formatEnvironmentToSnapshotData(envData: EnvironmentData): string {
+  return JSON.stringify({
+    envName: envData.envName,
+    mappedBranch: envData.mappedBranch,
+    mappedCommitId: envData.mappedCommitId || null,
+    description: envData.description,
+    updatedAt: envData.updatedAt || new Date().toISOString(),
+  })
+}
+
+/**
+ * Convert EntityInstance to EnvironmentData (for table display)
+ * Note: This only uses metadata, full data requires fetching snapshot
+ */
+export function entityToEnvironment(entity: EntityInstance): Partial<EnvironmentData> {
+  return {
+    envName: entity.slug, // slug is the envName
+    createdAt: entity.createdAt,
+  }
+}
+

@@ -434,7 +434,7 @@ export function UbosStudioLayout({
           {activeView === 'processLog' ? (
             <ProcessLogViewer />
           ) : activeView === 'environments' ? (
-            <EnvironmentManager />
+            <EnvironmentManager currentBranch={currentBranch} />
           ) : activeView === 'schema' ? (
             <SchemaManager availableEntityTypes={entityTypes} currentBranch={currentBranch} />
           ) : (

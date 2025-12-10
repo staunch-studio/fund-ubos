@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Modal, Form, Input, Select, InputNumber, Button, Space, message, theme, Typography, Alert } from 'antd'
-import { Server, GitBranch, Hash, FileText, AlertTriangle } from 'lucide-react'
-import { useGetBranchesQuery, useSaveEnvironmentMutation, useGetSnapshotByCommitQuery } from '../store/ubosApi'
-import type { Environment } from '../types/ubos'
+import { Server, GitBranch, Hash, AlertTriangle } from 'lucide-react'
+import { useGetBranchesQuery, useBatchCommitMutation, useGetSnapshotByCommitQuery, useGetSnapshotQuery } from '../store/ubosApi'
+import { formatEnvironmentToSnapshotData, parseEnvironmentFromSnapshot, type EnvironmentData } from '../utils/entityHelpers'
 
 const { TextArea } = Input
 const { Text } = Typography
@@ -11,21 +11,25 @@ interface EnvironmentEditModalProps {
   open: boolean
   onCancel: () => void
   onSuccess?: () => void
-  environment?: Environment | null // If provided, this is an edit operation
+  environmentId?: string | null // If provided, this is an edit operation
+  environmentData?: EnvironmentData | null // Existing environment data for editing
+  currentBranch: string
 }
 
 export function EnvironmentEditModal({
   open,
   onCancel,
   onSuccess,
-  environment,
+  environmentId,
+  environmentData,
+  currentBranch,
 }: EnvironmentEditModalProps) {
   const {
     token: { colorText, colorTextSecondary, colorBorder, colorWarning },
   } = theme.useToken()
 
   const [form] = Form.useForm()
-  const [saveEnvironment, { isLoading: isSaving }] = useSaveEnvironmentMutation()
+  const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
 
   // Fetch branches for branch selector
   const { data: branches = [], isLoading: isLoadingBranches } = useGetBranchesQuery(undefined, {
@@ -34,13 +38,31 @@ export function EnvironmentEditModal({
 
   const branchNames = branches.map(b => b.branchName)
 
+  // Fetch existing environment snapshot if editing
+  const {
+    data: environmentSnapshot,
+    isLoading: isLoadingSnapshot,
+  } = useGetSnapshotQuery(
+    {
+      slug: environmentId || '',
+      type: 'ENVIRONMENT',
+      branch: currentBranch,
+    },
+    {
+      skip: !open || !environmentId,
+    }
+  )
+
+  // Parse environment data from snapshot if available
+  const existingData = environmentSnapshot
+    ? parseEnvironmentFromSnapshot(environmentSnapshot)
+    : environmentData
+
   // Get form values for validation
   const mappedBranch = Form.useWatch('mappedBranch', form)
   const mappedCommitId = Form.useWatch('mappedCommitId', form)
 
   // Fetch commit details to validate branch match
-  // Note: We need to fetch from the mapped branch to check if the commit exists there
-  // If the commit is on a different branch, the API will return an error or different branchName
   const {
     data: commitSnapshot,
     isLoading: isLoadingCommit,
@@ -85,13 +107,13 @@ export function EnvironmentEditModal({
 
   useEffect(() => {
     if (open) {
-      if (environment) {
+      if (existingData) {
         // Edit mode: populate form with existing data
         form.setFieldsValue({
-          envName: environment.envName,
-          mappedBranch: environment.mappedBranch || 'master',
-          mappedCommitId: environment.mappedCommitId || undefined,
-          description: environment.description || '',
+          envName: existingData.envName,
+          mappedBranch: existingData.mappedBranch || 'master',
+          mappedCommitId: existingData.mappedCommitId || undefined,
+          description: existingData.description || '',
         })
       } else {
         // Create mode: reset form with defaults
@@ -101,23 +123,49 @@ export function EnvironmentEditModal({
         })
       }
     }
-  }, [open, environment, form])
+  }, [open, existingData, form])
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
       
-      await saveEnvironment({
-        envName: values.envName,
-        mappedBranch: values.mappedBranch || 'master', // Default to "master" if not provided
+      const envName = values.envName || environmentId || `env_${Date.now()}`
+      
+      // Create or update EnvironmentData
+      const envData: EnvironmentData = {
+        envName: envName,
+        mappedBranch: values.mappedBranch || 'master',
         mappedCommitId: values.mappedCommitId || null,
         description: values.description || undefined,
+        updatedAt: new Date().toISOString(),
+      }
+
+      // Format as snapshotData
+      const snapshotData = formatEnvironmentToSnapshotData(envData)
+
+      // Create JSON Patch
+      const jsonPatch = JSON.stringify([
+        {
+          op: 'replace',
+          path: '/snapshotData',
+          value: snapshotData,
+        },
+      ])
+
+      // Commit the environment entity
+      await batchCommit({
+        slugs: [envName],
+        branch: currentBranch,
+        jsonPatch,
+        message: environmentId
+          ? `Update environment: ${envName}`
+          : `Create environment: ${envName}`,
       }).unwrap()
 
       message.success(
-        environment
-          ? `Environment "${values.envName}" updated successfully`
-          : `Environment "${values.envName}" created successfully`
+        environmentId
+          ? `Environment "${envName}" updated successfully`
+          : `Environment "${envName}" created successfully`
       )
       form.resetFields()
       onSuccess?.()
@@ -133,23 +181,23 @@ export function EnvironmentEditModal({
         <Space>
           <Server size={18} />
           <Text strong style={{ fontSize: '16px' }}>
-            {environment ? 'Edit Environment' : 'Create Environment'}
+            {environmentId ? 'Edit Environment' : 'Create Environment'}
           </Text>
         </Space>
       }
       open={open}
       onCancel={onCancel}
       footer={[
-        <Button key="cancel" onClick={onCancel} disabled={isSaving}>
+        <Button key="cancel" onClick={onCancel} disabled={isCommitting}>
           Cancel
         </Button>,
         <Button
           key="save"
           type="primary"
           onClick={handleSubmit}
-          loading={isSaving}
+          loading={isCommitting || isLoadingSnapshot}
         >
-          {environment ? 'Update' : 'Create'}
+          {environmentId ? 'Update' : 'Create'}
         </Button>,
       ]}
       width={600}
@@ -180,7 +228,7 @@ export function EnvironmentEditModal({
             placeholder="e.g., production, staging, dev"
             prefix={<Server size={14} style={{ color: colorTextSecondary }} />}
             style={{ fontFamily: 'monospace' }}
-            disabled={!!environment} // Read-only if editing
+            disabled={!!environmentId} // Read-only if editing
           />
         </Form.Item>
 
@@ -288,6 +336,7 @@ export function EnvironmentEditModal({
           <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
             The environment will be mapped to the selected branch (defaults to "master" if not provided).
             If a commit ID is mapped, the environment will be pinned to that specific commit for stable testing.
+            Changes will be committed to branch "{currentBranch}".
           </Text>
         </div>
       </Form>

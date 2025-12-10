@@ -1,5 +1,7 @@
 package org.logrum.ubos.web.console;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.logrum.ubos.kernel.model.LcmEntityInstance;
@@ -9,6 +11,8 @@ import org.logrum.ubos.kernel.repository.LcmVersionRepository;
 import org.logrum.ubos.kernel.service.LcmAuditService;
 import org.logrum.ubos.kernel.service.LcmEnvironmentService;
 import org.logrum.ubos.kernel.service.LcmKernelService;
+import org.logrum.ubos.kernel.util.JsonSchemaValidator;
+import org.logrum.ubos.kernel.util.SchemaValidationException;
 import org.logrum.ubos.kernel.util.UbosUriUtil;
 import org.logrum.ubos.web.console.dto.BatchCommitRequest;
 import org.logrum.ubos.web.console.dto.BranchCreateRequest;
@@ -21,6 +25,7 @@ import org.logrum.ubos.web.console.dto.ProcessDetailItem;
 import org.logrum.ubos.web.console.dto.ProcessLogItem;
 import org.logrum.ubos.web.console.dto.ResourceContextRequest;
 import org.logrum.ubos.web.console.dto.RevertRequest;
+import org.logrum.ubos.web.console.dto.SchemaCommitRequest;
 import org.logrum.ubos.web.console.dto.SearchResult;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,15 +43,13 @@ import reactor.core.publisher.Mono;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.logrum.ubos.kernel.util.JsonSchemaValidator;
-import org.logrum.ubos.kernel.util.SchemaValidationException;
-import org.logrum.ubos.web.console.dto.SchemaCommitRequest;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/console")
 @RequiredArgsConstructor
-public class LcmConsoleController {
+public class LcmConsoleController
+{
 
     private final LcmKernelService kernelService;
     private final LcmAuditService auditService;
@@ -477,59 +480,119 @@ public class LcmConsoleController {
     }
 
     /**
-     * 13. Get All Environments Purpose: Get a list of all defined environment configurations.
+     * 13. Get All Environments Purpose: Get a list of all defined environment configurations from the Version Chain.
+     * Environments are stored as entities with entityType = 'ENVIRONMENT'
      */
     @GetMapping("/environments")
-    public Flux<EnvironmentConfigDto> getEnvironments()
+    public Flux<Map<String, Object>> getEnvironments(
+        @RequestParam(defaultValue = "master") String branch)
     {
-        log.debug("Fetching all environments");
-        return environmentService.findAll()
-            .map(EnvironmentConfigDto::fromEntity);
+
+        log.debug("Fetching all environments from version chain");
+
+        return entityRepo.findAll()
+            .filter(e -> "ENVIRONMENT".equalsIgnoreCase(e.getEntityType()))
+            .flatMap(entity ->
+                versionRepo.findHeadSnapshot(entity.getId(), branch)
+                    .map(version ->
+                    {
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("slug", entity.getSlug());
+                        result.put("entityType", entity.getEntityType());
+                        result.put("commitId", version.getCommitId());
+                        result.put("branchName", version.getBranchName());
+                        result.put("snapshotData", version.getSnapshotData());
+                        result.put("author", version.getAuthorId());
+                        result.put("message", version.getMessage());
+                        result.put("committedAt", version.getCommittedAt());
+                        return result;
+                    })
+            );
     }
 
     /**
-     * 14. Get Environment by Name Purpose: Get a specific environment configuration.
+     * 14. Get Environment by Name Purpose: Get a specific environment configuration from the version chain.
      *
-     * @param envName the environment name
+     * @param envName the environment name (slug)
+     * @param branch  the branch to read from (defaults to master)
      */
     @GetMapping("/environment/{envName}")
-    public Mono<EnvironmentConfigDto> getEnvironment(@PathVariable String envName)
+    public Mono<Map<String, Object>> getEnvironment(
+        @PathVariable String envName,
+        @RequestParam(defaultValue = "master") String branch)
     {
-        log.debug("Fetching environment: {}", envName);
-        return environmentService.findByName(envName)
-            .map(EnvironmentConfigDto::fromEntity)
+
+        log.debug("Fetching environment from version chain: {}", envName);
+
+        return kernelService.getResourceSnapshot("ENVIRONMENT", envName, branch)
+            .map(snapshotData ->
+            {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("envName", envName);
+                response.put("branch", branch);
+                response.put("snapshotData", snapshotData);
+                return response;
+            })
             .switchIfEmpty(Mono.error(new ResponseStatusException(
                 HttpStatus.NOT_FOUND, "Environment not found: " + envName)));
     }
 
     /**
-     * 15. Save Environment Configuration Purpose: Create or update an environment mapping.
+     * 15. Save Environment Configuration Purpose: Create or update an environment as a version-controlled entity. This
+     * commits the environment configuration to the 'ENVIRONMENT' entity type.
      * <p>
      * Request Body: { "envName": "UAT", "mappedBranch": "release-v2", "mappedCommitId": null, "description": "UAT
      * environment for v2 testing" }
      */
     @PostMapping("/environment/save")
-    public Mono<Map<String, Object>> saveEnvironment(@RequestBody EnvironmentConfigDto dto)
+    public Mono<Map<String, Object>> saveEnvironment(
+        @RequestBody EnvironmentConfigDto dto,
+        @RequestParam(defaultValue = "master") String branch,
+        @RequestParam(defaultValue = "system") String author)
     {
+
         if (dto.envName() == null || dto.envName().isBlank())
         {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.BAD_REQUEST, "envName is required"));
         }
 
-        log.info("💾 Save environment request: {}", dto.envName());
+        log.info("💾 Save environment request via version chain: {}", dto.envName());
 
-        return environmentService.save(dto)
-            .map(saved ->
-            {
-                Map<String, Object> response = new LinkedHashMap<>();
-                response.put("success", true);
-                response.put("message", String.format("Environment '%s' saved successfully", saved.getEnvName()));
-                response.put("environment", EnvironmentConfigDto.fromEntity(saved));
-                return response;
-            })
-            .onErrorResume(IllegalArgumentException.class, e ->
-                Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
+        try
+        {
+            // Convert DTO to JSON for version chain storage
+            String jsonContent = new ObjectMapper()
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+                .writeValueAsString(dto);
+
+            return kernelService.commit(
+                    "ENVIRONMENT",           // entityType
+                    dto.envName(),           // slug (environment name)
+                    branch,                  // branch
+                    jsonContent,             // JSON content
+                    author,                  // author
+                    "Environment configuration: " + dto.envName()  // commit message
+                )
+                .map(commitId ->
+                {
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("success", true);
+                    response.put("message", String.format("Environment '%s' committed successfully", dto.envName()));
+                    response.put("commitId", commitId);
+                    response.put("entityType", "ENVIRONMENT");
+                    response.put("slug", dto.envName());
+                    response.put("branch", branch);
+                    return response;
+                })
+                .onErrorResume(Exception.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
+        }
+        catch (JsonProcessingException e)
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Failed to serialize environment: " + e.getMessage()));
+        }
     }
 
     /**
@@ -630,15 +693,14 @@ public class LcmConsoleController {
     // ==================== Schema Management Endpoints ====================
 
     /**
-     * 20. Commit Schema Definition
-     * Purpose: Commit a new version of a JSON Schema definition.
-     * 
+     * 20. Commit Schema Definition Purpose: Commit a new version of a JSON Schema definition.
+     *
      * <p>Schema entities are stored with:
      * <ul>
      *   <li>entityType = 'SCHEMA'</li>
      *   <li>slug = the target entity type (e.g., 'LOGIC')</li>
      * </ul>
-     * 
+     * <p>
      * Request Body: {
      *   "targetType": "LOGIC",
      *   "jsonSchemaContent": "{\"type\": \"object\", \"properties\": {...}}",
@@ -647,23 +709,29 @@ public class LcmConsoleController {
      * }
      */
     @PostMapping("/schema/commit")
-    public Mono<Map<String, Object>> commitSchema(@RequestBody SchemaCommitRequest request) {
-        if (request.targetType() == null || request.targetType().isBlank()) {
+    public Mono<Map<String, Object>> commitSchema(@RequestBody SchemaCommitRequest request)
+    {
+        if (request.targetType() == null || request.targetType().isBlank())
+        {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.BAD_REQUEST, "targetType is required"));
         }
-        if (request.jsonSchemaContent() == null || request.jsonSchemaContent().isBlank()) {
+        if (request.jsonSchemaContent() == null || request.jsonSchemaContent().isBlank())
+        {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.BAD_REQUEST, "jsonSchemaContent is required"));
         }
 
         // Validate that the schema content is valid JSON Schema
-        try {
-            com.networknt.schema.JsonSchemaFactory factory = 
+        try
+        {
+            com.networknt.schema.JsonSchemaFactory factory =
                 com.networknt.schema.JsonSchemaFactory.getInstance(
                     com.networknt.schema.SpecVersion.VersionFlag.V7);
             factory.getSchema(request.jsonSchemaContent());
-        } catch (Exception e) {
+        }
+        catch (Exception e)
+        {
             return Mono.error(new ResponseStatusException(
                 HttpStatus.BAD_REQUEST, "Invalid JSON Schema: " + e.getMessage()));
         }
@@ -678,7 +746,8 @@ public class LcmConsoleController {
                 request.resolvedAuthor(),
                 request.resolvedMessage()
             )
-            .map(commitId -> {
+            .map(commitId ->
+            {
                 Map<String, Object> response = new LinkedHashMap<>();
                 response.put("success", true);
                 response.put("message", String.format("Schema for '%s' committed successfully", request.targetType()));
@@ -692,21 +761,22 @@ public class LcmConsoleController {
     }
 
     /**
-     * 21. Get Schema Definition
-     * Purpose: Get the current JSON Schema definition for an entity type.
-     * 
+     * 21. Get Schema Definition Purpose: Get the current JSON Schema definition for an entity type.
+     *
      * @param targetType the entity type to get schema for (e.g., "LOGIC")
      * @param branch     optional branch (defaults to "master")
      */
     @GetMapping("/schema/{targetType}")
     public Mono<Map<String, Object>> getSchema(
-            @PathVariable String targetType,
-            @RequestParam(defaultValue = "master") String branch) {
+        @PathVariable String targetType,
+        @RequestParam(defaultValue = "master") String branch)
+    {
 
         log.debug("📋 Fetching schema for type: {} on branch: {}", targetType, branch);
 
         return kernelService.getResourceSnapshot("SCHEMA", targetType.toUpperCase(), branch)
-            .map(schemaContent -> {
+            .map(schemaContent ->
+            {
                 Map<String, Object> response = new LinkedHashMap<>();
                 response.put("targetType", targetType.toUpperCase());
                 response.put("branch", branch);
@@ -720,18 +790,19 @@ public class LcmConsoleController {
     }
 
     /**
-     * 22. List All Schemas
-     * Purpose: Get a list of all defined schema entity types.
+     * 22. List All Schemas Purpose: Get a list of all defined schema entity types.
      */
     @GetMapping("/schemas")
-    public Flux<Map<String, Object>> listSchemas() {
+    public Flux<Map<String, Object>> listSchemas()
+    {
         log.debug("📋 Listing all schemas");
 
         return entityRepo.findAll()
             .filter(entity -> "SCHEMA".equalsIgnoreCase(entity.getEntityType()))
-            .flatMap(entity -> 
+            .flatMap(entity ->
                 versionRepo.findHeadSnapshot(entity.getId(), "master")
-                    .map(version -> {
+                    .map(version ->
+                    {
                         Map<String, Object> result = new LinkedHashMap<>();
                         result.put("targetType", entity.getSlug());
                         result.put("commitId", version.getCommitId());
@@ -744,23 +815,26 @@ public class LcmConsoleController {
     }
 
     /**
-     * 23. Clear Schema Cache
-     * Purpose: Clear the schema validation cache (useful after schema updates).
-     * 
+     * 23. Clear Schema Cache Purpose: Clear the schema validation cache (useful after schema updates).
+     *
      * @param targetType optional - if provided, only clear cache for this type
      */
     @PostMapping("/schema/cache/clear")
     public Mono<Map<String, Object>> clearSchemaCache(
-            @RequestParam(required = false) String targetType) {
+        @RequestParam(required = false) String targetType)
+    {
 
-        if (targetType != null && !targetType.isBlank()) {
+        if (targetType != null && !targetType.isBlank())
+        {
             schemaValidator.clearCache(targetType);
             log.info("🗑️ Schema cache cleared for type: {}", targetType);
             return Mono.just(Map.of(
                 "success", true,
                 "message", String.format("Schema cache cleared for '%s'", targetType)
             ));
-        } else {
+        }
+        else
+        {
             schemaValidator.clearCache();
             log.info("🗑️ All schema caches cleared");
             return Mono.just(Map.of(
@@ -771,11 +845,11 @@ public class LcmConsoleController {
     }
 
     /**
-     * 24. Get Schema Cache Stats
-     * Purpose: Get statistics about the schema validation cache.
+     * 24. Get Schema Cache Stats Purpose: Get statistics about the schema validation cache.
      */
     @GetMapping("/schema/cache/stats")
-    public Mono<Map<String, Object>> getSchemaCacheStats() {
+    public Mono<Map<String, Object>> getSchemaCacheStats()
+    {
         return Mono.just(schemaValidator.getCacheStats());
     }
 }

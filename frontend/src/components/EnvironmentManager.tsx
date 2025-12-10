@@ -1,35 +1,60 @@
-import { useState } from 'react'
-import { Table, Button, Space, Tag, Typography, theme, Popconfirm } from 'antd'
+import { useState, useMemo } from 'react'
+import { Table, Button, Space, Tag, Typography, theme } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { Server, Plus, Edit, GitBranch, Hash, Calendar, FileText } from 'lucide-react'
-import { useGetEnvironmentsQuery } from '../store/ubosApi'
+import { Server, Plus, Edit, GitBranch, Hash, Calendar } from 'lucide-react'
+import { useGetEntitiesQuery } from '../store/ubosApi'
 import { EnvironmentEditModal } from './EnvironmentEditModal'
-import type { Environment } from '../types/ubos'
+import type { EntityInstance } from '../types/ubos'
+import { entityToEnvironment, type EnvironmentData } from '../utils/entityHelpers'
 
 const { Text } = Typography
 
-export function EnvironmentManager() {
+interface EnvironmentManagerProps {
+  currentBranch: string
+}
+
+export function EnvironmentManager({ currentBranch }: EnvironmentManagerProps) {
   const {
     token: { colorText, colorTextSecondary, colorBorder, colorPrimary, colorBgContainer },
   } = theme.useToken()
 
   const [editModalOpen, setEditModalOpen] = useState(false)
-  const [editingEnvironment, setEditingEnvironment] = useState<Environment | null>(null)
+  const [editingEnvironmentId, setEditingEnvironmentId] = useState<string | null>(null)
 
-  // Fetch environments
+  // Fetch all ENVIRONMENT entities
   const {
-    data: environments = [],
+    data: environmentEntities = [],
     isLoading: isLoadingEnvironments,
     refetch: refetchEnvironments,
-  } = useGetEnvironmentsQuery()
+  } = useGetEntitiesQuery({
+    branch: currentBranch,
+    type: 'ENVIRONMENT',
+  })
+
+  // Convert entities to enriched environment data
+  const enrichedEnvironments = useMemo(() => {
+    return environmentEntities.map((entity) => {
+      const partial = entityToEnvironment(entity)
+      return {
+        entity,
+        data: {
+          envName: partial.envName || entity.slug,
+          mappedBranch: 'master', // Default - will be loaded from snapshot when needed
+          mappedCommitId: null,
+          description: undefined,
+          updatedAt: partial.createdAt || entity.createdAt,
+        } as EnvironmentData,
+      }
+    })
+  }, [environmentEntities])
 
   const handleCreate = () => {
-    setEditingEnvironment(null)
+    setEditingEnvironmentId(null)
     setEditModalOpen(true)
   }
 
-  const handleEdit = (environment: Environment) => {
-    setEditingEnvironment(environment)
+  const handleEdit = (envName: string) => {
+    setEditingEnvironmentId(envName)
     setEditModalOpen(true)
   }
 
@@ -37,24 +62,22 @@ export function EnvironmentManager() {
     refetchEnvironments()
   }
 
-  const columns: ColumnsType<Environment> = [
+  const columns: ColumnsType<{ entity: EntityInstance; data: EnvironmentData }> = [
     {
       title: 'Environment Name',
-      dataIndex: 'envName',
       key: 'envName',
-      render: (name: string) => (
+      render: (_, record) => (
         <Space>
           <Server size={16} color={colorPrimary} />
-          <Text style={{ fontWeight: 500, color: colorText }}>{name}</Text>
+          <Text style={{ fontWeight: 500, color: colorText }}>{record.data.envName}</Text>
         </Space>
       ),
     },
     {
       title: 'Mapped Branch',
-      dataIndex: 'mappedBranch',
       key: 'mappedBranch',
       width: 150,
-      render: (branch: string) => (
+      render: (_, record) => (
         <Space size="small">
           <GitBranch size={14} color={colorTextSecondary} />
           <Tag
@@ -66,18 +89,17 @@ export function EnvironmentManager() {
               color: colorText,
             }}
           >
-            {branch}
+            {record.data.mappedBranch}
           </Tag>
         </Space>
       ),
     },
     {
       title: 'Mapped Commit ID',
-      dataIndex: 'mappedCommitId',
       key: 'mappedCommitId',
       width: 150,
-      render: (commitId: number | null | undefined) =>
-        commitId ? (
+      render: (_, record) =>
+        record.data.mappedCommitId ? (
           <Space size="small">
             <Hash size={14} color={colorTextSecondary} />
             <Text
@@ -88,7 +110,7 @@ export function EnvironmentManager() {
                 fontWeight: 500,
               }}
             >
-              #{commitId}
+              #{record.data.mappedCommitId}
             </Text>
           </Space>
         ) : (
@@ -97,27 +119,25 @@ export function EnvironmentManager() {
     },
     {
       title: 'Description',
-      dataIndex: 'description',
       key: 'description',
       ellipsis: true,
-      render: (desc: string) =>
-        desc ? (
-          <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>{desc}</Text>
+      render: (_, record) =>
+        record.data.description ? (
+          <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>{record.data.description}</Text>
         ) : (
           <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>-</Text>
         ),
     },
     {
       title: 'Last Updated',
-      dataIndex: 'updatedAt',
       key: 'updatedAt',
       width: 180,
-      render: (time: string) =>
-        time ? (
+      render: (_, record) =>
+        record.data.updatedAt ? (
           <Space size="small">
             <Calendar size={14} color={colorTextSecondary} />
             <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-              {new Date(time).toLocaleString()}
+              {new Date(record.data.updatedAt).toLocaleString()}
             </Text>
           </Space>
         ) : (
@@ -129,12 +149,12 @@ export function EnvironmentManager() {
       key: 'actions',
       width: 100,
       fixed: 'right' as const,
-      render: (_, record: Environment) => (
+      render: (_, record) => (
         <Button
           type="link"
           size="small"
           icon={<Edit size={14} />}
-          onClick={() => handleEdit(record)}
+          onClick={() => handleEdit(record.data.envName)}
           style={{ padding: '0 8px' }}
         >
           Edit
@@ -162,7 +182,7 @@ export function EnvironmentManager() {
             Environment Manager
           </Text>
           <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-            ({environments.length} environments)
+            ({enrichedEnvironments.length} environments)
           </Text>
         </Space>
         <Space>
@@ -185,7 +205,7 @@ export function EnvironmentManager() {
 
       {/* Table */}
       <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-        {environments.length === 0 && !isLoadingEnvironments ? (
+        {enrichedEnvironments.length === 0 && !isLoadingEnvironments ? (
           <div
             style={{
               padding: '48px',
@@ -204,9 +224,9 @@ export function EnvironmentManager() {
         ) : (
           <Table
             columns={columns}
-            dataSource={environments}
+            dataSource={enrichedEnvironments}
             loading={isLoadingEnvironments}
-            rowKey="envName"
+            rowKey={(record) => record.entity.id}
             pagination={{
               pageSize: 20,
               showSizeChanger: true,
@@ -223,10 +243,12 @@ export function EnvironmentManager() {
         open={editModalOpen}
         onCancel={() => {
           setEditModalOpen(false)
-          setEditingEnvironment(null)
+          setEditingEnvironmentId(null)
         }}
         onSuccess={handleModalSuccess}
-        environment={editingEnvironment}
+        environmentId={editingEnvironmentId}
+        environmentData={editingEnvironmentId ? enrichedEnvironments.find((e) => e.data.envName === editingEnvironmentId)?.data : null}
+        currentBranch={currentBranch}
       />
     </div>
   )
