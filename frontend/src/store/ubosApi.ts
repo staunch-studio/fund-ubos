@@ -67,11 +67,13 @@ export const ubosApi = createApi({
     // No transformResponse needed - backend returns Camel Case JSON directly
     getSnapshot: builder.query<EntitySnapshot, string>({
       query: (uri) => {
-        const searchParams = new URLSearchParams()
-        searchParams.append('uri', uri)
+        // Encode the URI properly for URL parameter
+        const encodedUri = encodeURIComponent(uri)
         return {
           url: 'snapshot',
-          params: searchParams,
+          params: {
+            uri: encodedUri,
+          },
         }
       },
       // ✅ No transformResponse - relies on default JSON parsing which respects backend's Camel Case

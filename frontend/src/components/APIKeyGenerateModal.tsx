@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Modal, Form, Input, Select, Button, Space, message, theme, Typography, Alert, Input as AntdInput } from 'antd'
 import { Key, Save, Copy, CheckCircle2, AlertTriangle } from 'lucide-react'
-import { useBatchCommitMutation, useGetSnapshotQuery } from '../store/ubosApi'
+import { useBatchCommitMutation } from '../store/ubosApi'
 import { formatSecurityKeyToSnapshotData, type SecurityKeyData } from '../utils/entityHelpers'
 
 const { TextArea } = Input

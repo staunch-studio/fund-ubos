@@ -482,7 +482,7 @@ export function UbosStudioLayout({
             {/* Right Pane: Code Inspector - Enhanced */}
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
               {/* Metadata Bar - Full UBOS URI - Enhanced */}
-              {selectedEntity ? (
+              {activeResourceUri ? (
                 <div
                   style={{
                     padding: '14px 20px',
@@ -571,11 +571,7 @@ export function UbosStudioLayout({
               {/* Monaco Editor - Full Height */}
               <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
                 <SnapshotEditor
-                  entity={selectedEntity}
-                  branches={branches}
-                  currentBranch={currentBranch}
-                  onBranchChange={handleBranchChange}
-                  onCommit={handleCommit}
+                  activeUri={activeResourceUri}
                   onSnapshotChange={handleSnapshotChange}
                   hideHeader={true}
                 />
@@ -599,7 +595,7 @@ export function UbosStudioLayout({
                   onChange={(e) => setCommitMessage(e.target.value)}
                   onPressEnter={handleCommit}
                   style={{ flex: 1 }}
-                  disabled={!selectedEntity}
+                  disabled={!activeResourceUri}
                   prefix={
                     <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>💬</Text>
                   }
@@ -608,7 +604,7 @@ export function UbosStudioLayout({
                   type="primary"
                   onClick={handleCommit}
                   loading={isCommitting}
-                  disabled={!selectedEntity || !hasChanges}
+                  disabled={!activeResourceUri || !hasChanges}
                   style={{
                     minWidth: 140,
                     height: 36,

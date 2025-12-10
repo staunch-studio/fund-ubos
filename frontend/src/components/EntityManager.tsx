@@ -111,7 +111,11 @@ export function EntityManager({
         key: 'ubosUri',
         width: 380,
         render: (_: any, record: EntityInstance) => {
-          const uri = buildUbosUri(record, currentBranch)
+          // Safely build URI with validation
+          if (!record.entityType || !record.slug || !currentBranch) {
+            return <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>-</Text>
+          }
+          const uri = buildUbosUri(record.entityType, record.slug, currentBranch)
           const isCopied = copiedUri === uri
           return (
             <Space

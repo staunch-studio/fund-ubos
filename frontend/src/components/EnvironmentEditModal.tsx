@@ -3,6 +3,7 @@ import { Modal, Form, Input, Select, InputNumber, Button, Space, message, theme,
 import { Server, GitBranch, Hash, AlertTriangle } from 'lucide-react'
 import { useGetBranchesQuery, useBatchCommitMutation, useGetSnapshotByCommitQuery, useGetSnapshotQuery } from '../store/ubosApi'
 import { formatEnvironmentToSnapshotData, parseEnvironmentFromSnapshot, type EnvironmentData } from '../utils/entityHelpers'
+import { buildUbosUri } from '../utils/useUbosUri'
 
 const { TextArea } = Input
 const { Text } = Typography
@@ -38,20 +39,18 @@ export function EnvironmentEditModal({
 
   const branchNames = branches.map(b => b.branchName)
 
+  // Build URI for fetching environment snapshot
+  const environmentUri = environmentId && currentBranch
+    ? buildUbosUri('ENVIRONMENT', environmentId, currentBranch)
+    : null
+
   // Fetch existing environment snapshot if editing
   const {
     data: environmentSnapshot,
     isLoading: isLoadingSnapshot,
-  } = useGetSnapshotQuery(
-    {
-      slug: environmentId || '',
-      type: 'ENVIRONMENT',
-      branch: currentBranch,
-    },
-    {
-      skip: !open || !environmentId,
-    }
-  )
+  } = useGetSnapshotQuery(environmentUri || '', {
+    skip: !open || !environmentUri,
+  })
 
   // Parse environment data from snapshot if available
   const existingData = environmentSnapshot
