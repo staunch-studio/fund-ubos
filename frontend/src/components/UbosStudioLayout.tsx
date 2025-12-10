@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -11,6 +11,7 @@ import { BranchManagerModal } from './BranchManagerModal'
 import { BranchMergeModal } from './BranchMergeModal'
 import { SearchResultsModal } from './SearchResultsModal'
 import { ProcessLogViewer } from './ProcessLogViewer'
+import { EnvironmentManager } from './EnvironmentManager'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery } from '../store/ubosApi'
 import { message } from 'antd'
@@ -62,7 +63,7 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments'>('entities')
   
   const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
@@ -95,6 +96,9 @@ export function UbosStudioLayout({
   const handleEntityTypeSelect: MenuProps['onClick'] = (e) => {
     if (e.key === 'processLog') {
       setActiveView('processLog')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'environments') {
+      setActiveView('environments')
       setSelectedEntityType(undefined)
     } else if (e.key === 'all') {
       setActiveView('entities')
@@ -217,6 +221,15 @@ export function UbosStudioLayout({
         label: (
           <span style={{ fontWeight: activeView === 'processLog' ? 500 : 400 }}>
             Process Log
+          </span>
+        ),
+      },
+      {
+        key: 'environments',
+        icon: <Server size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'environments' ? 500 : 400 }}>
+            Environments
           </span>
         ),
       },
@@ -367,12 +380,20 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
             mode="inline"
-            selectedKeys={activeView === 'processLog' ? ['processLog'] : selectedEntityType ? [selectedEntityType] : ['all']}
+            selectedKeys={
+              activeView === 'processLog'
+                ? ['processLog']
+                : activeView === 'environments'
+                ? ['environments']
+                : selectedEntityType
+                ? [selectedEntityType]
+                : ['all']
+            }
             onClick={handleEntityTypeSelect}
             style={{
               height: 'calc(100% - 57px)',
@@ -394,6 +415,8 @@ export function UbosStudioLayout({
         >
           {activeView === 'processLog' ? (
             <ProcessLogViewer />
+          ) : activeView === 'environments' ? (
+            <EnvironmentManager />
           ) : (
           <SplitPane
             split="vertical"

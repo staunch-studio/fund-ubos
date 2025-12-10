@@ -1,0 +1,297 @@
+import { useState, useEffect } from 'react'
+import { Modal, Form, Input, Select, InputNumber, Button, Space, message, theme, Typography, Alert } from 'antd'
+import { Server, GitBranch, Hash, FileText, AlertTriangle } from 'lucide-react'
+import { useGetBranchesQuery, useSaveEnvironmentMutation, useGetSnapshotByCommitQuery } from '../store/ubosApi'
+import type { Environment } from '../types/ubos'
+
+const { TextArea } = Input
+const { Text } = Typography
+
+interface EnvironmentEditModalProps {
+  open: boolean
+  onCancel: () => void
+  onSuccess?: () => void
+  environment?: Environment | null // If provided, this is an edit operation
+}
+
+export function EnvironmentEditModal({
+  open,
+  onCancel,
+  onSuccess,
+  environment,
+}: EnvironmentEditModalProps) {
+  const {
+    token: { colorText, colorTextSecondary, colorBorder, colorWarning },
+  } = theme.useToken()
+
+  const [form] = Form.useForm()
+  const [saveEnvironment, { isLoading: isSaving }] = useSaveEnvironmentMutation()
+
+  // Fetch branches for branch selector
+  const { data: branches = [], isLoading: isLoadingBranches } = useGetBranchesQuery(undefined, {
+    skip: !open,
+  })
+
+  const branchNames = branches.map(b => b.branchName)
+
+  // Get form values for validation
+  const mappedBranch = Form.useWatch('mappedBranch', form)
+  const mappedCommitId = Form.useWatch('mappedCommitId', form)
+
+  // Fetch commit details to validate branch match
+  // Note: We need to fetch from the mapped branch to check if the commit exists there
+  // If the commit is on a different branch, the API will return an error or different branchName
+  const {
+    data: commitSnapshot,
+    isLoading: isLoadingCommit,
+    error: commitError,
+  } = useGetSnapshotByCommitQuery(
+    {
+      slug: 'validation', // Dummy slug - we only need commit metadata
+      type: 'LOGIC',
+      branch: mappedBranch || 'master',
+      commitId: mappedCommitId || 0,
+    },
+    {
+      skip: !open || !mappedCommitId || !mappedBranch || mappedCommitId <= 0,
+    }
+  )
+
+  const [branchMismatchWarning, setBranchMismatchWarning] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (mappedCommitId && mappedBranch) {
+      if (commitError) {
+        // If there's an error, the commit might not exist on the mapped branch
+        setBranchMismatchWarning(
+          `Warning: Unable to verify commit ${mappedCommitId} on branch '${mappedBranch}'. Please verify the commit exists on this branch.`
+        )
+      } else if (commitSnapshot) {
+        // If we got a snapshot, check if the branch matches
+        if (commitSnapshot.branchName !== mappedBranch) {
+          setBranchMismatchWarning(
+            `Warning: Mapped Commit ID ${mappedCommitId} is on '${commitSnapshot.branchName}' branch, but mappedBranch is '${mappedBranch}'`
+          )
+        } else {
+          setBranchMismatchWarning(null)
+        }
+      } else {
+        setBranchMismatchWarning(null)
+      }
+    } else {
+      setBranchMismatchWarning(null)
+    }
+  }, [commitSnapshot, commitError, mappedCommitId, mappedBranch])
+
+  useEffect(() => {
+    if (open) {
+      if (environment) {
+        // Edit mode: populate form with existing data
+        form.setFieldsValue({
+          envName: environment.envName,
+          mappedBranch: environment.mappedBranch || 'master',
+          mappedCommitId: environment.mappedCommitId || undefined,
+          description: environment.description || '',
+        })
+      } else {
+        // Create mode: reset form with defaults
+        form.resetFields()
+        form.setFieldsValue({
+          mappedBranch: 'master', // Default to "master" as per backend
+        })
+      }
+    }
+  }, [open, environment, form])
+
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields()
+      
+      await saveEnvironment({
+        envName: values.envName,
+        mappedBranch: values.mappedBranch || 'master', // Default to "master" if not provided
+        mappedCommitId: values.mappedCommitId || null,
+        description: values.description || undefined,
+      }).unwrap()
+
+      message.success(
+        environment
+          ? `Environment "${values.envName}" updated successfully`
+          : `Environment "${values.envName}" created successfully`
+      )
+      form.resetFields()
+      onSuccess?.()
+      onCancel()
+    } catch (err: any) {
+      message.error(err?.data?.message || 'Failed to save environment')
+    }
+  }
+
+  return (
+    <Modal
+      title={
+        <Space>
+          <Server size={18} />
+          <Text strong style={{ fontSize: '16px' }}>
+            {environment ? 'Edit Environment' : 'Create Environment'}
+          </Text>
+        </Space>
+      }
+      open={open}
+      onCancel={onCancel}
+      footer={[
+        <Button key="cancel" onClick={onCancel} disabled={isSaving}>
+          Cancel
+        </Button>,
+        <Button
+          key="save"
+          type="primary"
+          onClick={handleSubmit}
+          loading={isSaving}
+        >
+          {environment ? 'Update' : 'Create'}
+        </Button>,
+      ]}
+      width={600}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={false}
+        style={{ marginTop: '16px' }}
+      >
+        <Form.Item
+          label={
+            <Text style={{ color: colorText, fontWeight: 500 }}>
+              Environment Name
+            </Text>
+          }
+          name="envName"
+          rules={[
+            { required: true, message: 'Please enter an environment name' },
+            {
+              pattern: /^[a-zA-Z0-9_-]+$/,
+              message: 'Environment name can only contain letters, numbers, underscores, and hyphens',
+            },
+          ]}
+        >
+          <Input
+            placeholder="e.g., production, staging, dev"
+            prefix={<Server size={14} style={{ color: colorTextSecondary }} />}
+            style={{ fontFamily: 'monospace' }}
+            disabled={!!environment} // Read-only if editing
+          />
+        </Form.Item>
+
+        <Form.Item
+          label={
+            <Space>
+              <Text style={{ color: colorText, fontWeight: 500 }}>
+                Mapped Branch
+              </Text>
+              <Text style={{ color: colorTextSecondary, fontSize: '12px', fontWeight: 400 }}>
+                (defaults to "master")
+              </Text>
+            </Space>
+          }
+          name="mappedBranch"
+          initialValue="master"
+        >
+          <Select
+            placeholder="Select branch to map"
+            loading={isLoadingBranches}
+            options={branchNames.map((name) => ({
+              label: (
+                <Space>
+                  <GitBranch size={14} />
+                  <span>{name}</span>
+                </Space>
+              ),
+              value: name,
+            }))}
+            notFoundContent={
+              isLoadingBranches ? (
+                <Text style={{ color: colorTextSecondary }}>Loading branches...</Text>
+              ) : (
+                <Text style={{ color: colorTextSecondary }}>No branches found</Text>
+              )
+            }
+          />
+        </Form.Item>
+
+        <Form.Item
+          label={
+            <Space>
+              <Text style={{ color: colorText, fontWeight: 500 }}>
+                Mapped Commit ID
+              </Text>
+              <Text style={{ color: colorTextSecondary, fontSize: '12px', fontWeight: 400 }}>
+                (Optional)
+              </Text>
+            </Space>
+          }
+          name="mappedCommitId"
+          tooltip="Pin to a specific commit for stable testing"
+        >
+          <InputNumber
+            placeholder="e.g., 101"
+            prefix={<Hash size={14} style={{ color: colorTextSecondary }} />}
+            style={{ width: '100%' }}
+            min={1}
+            precision={0}
+            controls
+            loading={isLoadingCommit}
+          />
+        </Form.Item>
+
+        {branchMismatchWarning && (
+          <Alert
+            message={branchMismatchWarning}
+            type="warning"
+            icon={<AlertTriangle size={16} />}
+            style={{ marginBottom: '16px' }}
+            showIcon
+          />
+        )}
+
+        <Form.Item
+          label={
+            <Space>
+              <Text style={{ color: colorText, fontWeight: 500 }}>
+                Description
+              </Text>
+              <Text style={{ color: colorTextSecondary, fontSize: '12px', fontWeight: 400 }}>
+                (Optional)
+              </Text>
+            </Space>
+          }
+          name="description"
+        >
+          <TextArea
+            placeholder="e.g., Production environment for customer-facing services"
+            rows={3}
+            maxLength={500}
+            showCount
+          />
+        </Form.Item>
+
+        <div
+          style={{
+            padding: '12px',
+            background: 'rgba(74, 158, 255, 0.05)',
+            borderRadius: '4px',
+            border: `1px solid ${colorBorder}`,
+            marginTop: '8px',
+          }}
+        >
+          <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
+            The environment will be mapped to the selected branch (defaults to "master" if not provided).
+            If a commit ID is mapped, the environment will be pinned to that specific commit for stable testing.
+          </Text>
+        </div>
+      </Form>
+    </Modal>
+  )
+}
+

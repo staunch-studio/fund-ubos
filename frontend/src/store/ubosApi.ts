@@ -19,6 +19,9 @@ import type {
   SearchResult,
   ProcessRecord,
   ProcessDetail,
+  Environment,
+  SaveEnvironmentRequest,
+  SaveEnvironmentResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -33,7 +36,7 @@ export const ubosApi = createApi({
     baseUrl: '/api/console',
     // No Authorization headers - backend uses IP whitelisting
   }),
-  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process'],
+  tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process', 'Environment'],
   endpoints: (builder) => ({
     // GET /entities
     getEntities: builder.query<EntityInstance[], GetEntitiesParams>({
@@ -242,6 +245,30 @@ export const ubosApi = createApi({
         { type: 'Process', id: processId },
       ],
     }),
+
+    // GET /environments
+    getEnvironments: builder.query<Environment[], void>({
+      query: () => ({
+        url: 'environments',
+      }),
+      providesTags: [{ type: 'Environment', id: 'LIST' }],
+    }),
+
+    // POST /environment/save
+    saveEnvironment: builder.mutation<SaveEnvironmentResponse, SaveEnvironmentRequest>({
+      query: (body) => ({
+        url: 'environment/save',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        // Invalidate environment list to trigger refresh
+        return [{ type: 'Environment', id: 'LIST' }]
+      },
+    }),
   }),
 })
 
@@ -259,5 +286,7 @@ export const {
   useLazySearchQuery,
   useGetRecentProcessesQuery,
   useGetProcessDetailQuery,
+  useGetEnvironmentsQuery,
+  useSaveEnvironmentMutation,
 } = ubosApi
 

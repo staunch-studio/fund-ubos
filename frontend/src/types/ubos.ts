@@ -171,3 +171,25 @@ export interface ProcessCommit {
   authorId: string;
   createdAt: string; // ISO String
 }
+
+// Environment types - matches Java EnvironmentConfigDto
+export interface Environment {
+  envName: string; // Required: the environment name (e.g., "UAT", "PROD")
+  mappedBranch: string; // Required: the default branch for this environment (defaults to "master")
+  mappedCommitId?: number | null; // Optional: pin to a specific commit for stable testing
+  description?: string; // Optional: description of the environment
+  updatedAt?: string; // Optional: ISO String - timestamp of the last update (read-only, set by server)
+}
+
+export interface SaveEnvironmentRequest {
+  envName: string; // Required: the environment name (e.g., "UAT", "PROD")
+  mappedBranch?: string; // Optional: the default branch (defaults to "master" if not provided)
+  mappedCommitId?: number | null; // Optional: pin to a specific commit for stable testing
+  description?: string; // Optional: description of the environment
+}
+
+export interface SaveEnvironmentResponse {
+  success: boolean;
+  envName: string;
+  message?: string;
+}
