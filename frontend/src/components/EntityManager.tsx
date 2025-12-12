@@ -61,23 +61,6 @@ export function EntityManager({
   const columns: ColumnsType<EntityInstance> = useMemo(
     () => [
       {
-        title: 'ID',
-        dataIndex: 'id',
-        key: 'id',
-        width: 180,
-        render: (text: string) => (
-          <Text
-            style={{
-              fontFamily: '"SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace',
-              fontSize: '12px',
-              color: colorTextSecondary,
-            }}
-          >
-            {text}
-          </Text>
-        ),
-      },
-      {
         title: 'Slug',
         dataIndex: 'slug',
         key: 'slug',
@@ -270,7 +253,7 @@ export function EntityManager({
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size="middle">
             <Search
-              placeholder="Search entities by slug, type, or ID..."
+              placeholder="Search entities by slug or type..."
               allowClear
               onSearch={handleSearch}
               style={{ width: 360 }}

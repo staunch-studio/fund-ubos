@@ -10,6 +10,7 @@ import org.logrum.ubos.kernel.repository.LcmEntityRepository;
 import org.logrum.ubos.kernel.repository.LcmVersionRepository;
 import org.logrum.ubos.kernel.service.LcmApprovalService;
 import org.logrum.ubos.kernel.service.LcmAuditService;
+import org.logrum.ubos.kernel.service.LcmAuthzService;
 import org.logrum.ubos.kernel.service.LcmEnvironmentService;
 import org.logrum.ubos.kernel.service.LcmKernelService;
 import org.logrum.ubos.kernel.util.JsonSchemaValidator;
@@ -63,14 +64,22 @@ public class LcmConsoleController
     private final LcmVersionRepository versionRepo;
     private final JsonSchemaValidator schemaValidator;
     private final ObjectMapper objectMapper;
+    private final LcmAuthzService authzService;
+
     /**
      * 1. 获取实体列表 前端 RTK Query: useGetEntitiesQuery
+     *
+     * Future-proofed with optional tenantId/groupId parameter for data isolation.
      */
     @GetMapping("/entities")
     public Flux<LcmEntityInstance> getEntities(
         @RequestParam(required = false) String type,
-        @RequestParam(required = false) String search)
+        @RequestParam(required = false) String search,
+        @RequestParam(required = false) String tenantId,
+        @RequestParam(required = false) String groupId)
     {
+        // TODO: When multi-tenancy is implemented, filter by tenantId/groupId
+        // For now, these parameters are accepted but not used
 
         Flux<LcmEntityInstance> all = entityRepo.findAll();
         if (type != null && !type.isBlank())
@@ -236,34 +245,55 @@ public class LcmConsoleController
     {
         String entityType = (req.entityType() == null) ? "LOGIC" : req.entityType();
         String branch = (req.branch() == null) ? "master" : req.branch();
+        String author = "AdminConsole"; // TODO: Get from authentication
 
         log.info("Batch commit started: {} items, branch={}", req.slugs().size(), branch);
 
-        return kernelService.startProcess("Console Batch Update", "AdminConsole")
-            .flatMap(processId ->
+        // Authorization check for each slug
+        return authzService.getCurrentUser()
+            .flatMap(userId ->
                 Flux.fromIterable(req.slugs())
-                    .flatMap(slug ->
-                        kernelService.commit(
-                            entityType,
-                            slug,
-                            branch,
-                            req.jsonPatch(),
-                            "AdminConsole",
-                            req.message(),
-                            processId
-                        )
-                    )
+                    .flatMap(slug -> {
+                        String uri = LcmAuthzService.buildUri(entityType, slug, branch);
+                        return authzService.isPermitted(userId, LcmAuthzService.ACTION_COMMIT, uri)
+                            .flatMap(permitted -> {
+                                if (!permitted) {
+                                    return Mono.error(new ResponseStatusException(
+                                        HttpStatus.FORBIDDEN,
+                                        String.format("Not permitted to commit %s/%s on branch %s", entityType, slug, branch)
+                                    ));
+                                }
+                                return Mono.just(slug);
+                            });
+                    })
                     .collectList()
-                    .map(commitIds -> "✅ Processed " + commitIds.size() + " entities. (ProcessID: " + processId + ")")
+            )
+            .flatMap(authorizedSlugs ->
+                kernelService.startProcess("Console Batch Update", author)
+                    .flatMap(processId ->
+                        Flux.fromIterable(authorizedSlugs)
+                            .flatMap(slug ->
+                                kernelService.commit(
+                                    entityType,
+                                    slug,
+                                    branch,
+                                    req.jsonPatch(),
+                                    author,
+                                    req.message(),
+                                    processId
+                                )
+                            )
+                            .collectList()
+                            .map(commitIds -> "✅ Processed " + commitIds.size() + " entities. (ProcessID: " + processId + ")")
+                    )
             );
     }
+
 
     // ==================== Branch Management Endpoints ====================
 
     /**
      * 6. Revert to a specific commit Purpose: Move the Branch HEAD pointer to a specified historical commit.
-     * <p>
-     * Request Body: {"slug": "tax-calc", "type": "LOGIC", "branch": "master", "targetCommitId": 99}
      */
     @PostMapping("/revert")
     public Mono<Map<String, Object>> revertToCommit(@RequestBody RevertRequest request)
@@ -280,7 +310,21 @@ public class LcmConsoleController
         log.info("🔄 Revert request: {}/{}@{} -> commit {}",
             request.resolvedType(), request.slug(), request.resolvedBranch(), request.targetCommitId());
 
-        return kernelService.revertToCommit(request)
+        String uri = LcmAuthzService.buildUri(request.resolvedType(), request.slug(), request.resolvedBranch());
+
+        // Authorization check
+        return authzService.getCurrentUser()
+            .flatMap(userId -> authzService.isPermitted(userId, LcmAuthzService.ACTION_REVERT, uri))
+            .flatMap(permitted -> {
+                if (!permitted) {
+                    return Mono.error(new ResponseStatusException(
+                        HttpStatus.FORBIDDEN,
+                        String.format("Not permitted to revert %s/%s on branch %s",
+                            request.resolvedType(), request.slug(), request.resolvedBranch())
+                    ));
+                }
+                return kernelService.revertToCommit(request);
+            })
             .map(commitId -> Map.<String, Object>of(
                 "success", true,
                 "message", String.format("Successfully reverted %s/%s@%s to commit %d",
@@ -342,9 +386,6 @@ public class LcmConsoleController
 
     /**
      * 9. Merge branches Purpose: Merge entities from source branch into target branch using content-level merge.
-     * <p>
-     * Request Body: { "sourceBranch": "feature-v2", "targetBranch": "master", "type": "LOGIC", "slugs": ["tax-calc",
-     * "price-calc"], "author": "admin", "message": "Merge feature-v2 into master" }
      */
     @PostMapping("/merge")
     public Mono<Map<String, Object>> mergeBranches(@RequestBody MergeRequest request)
@@ -363,8 +404,27 @@ public class LcmConsoleController
         log.info("🔀 Merge request: {} -> {}, slugs: {}",
             request.sourceBranch(), request.resolvedTargetBranch(), request.slugs());
 
-        return kernelService.mergeBranches(request)
-            .collectList()
+        // Authorization check for merge on target branch
+        return authzService.getCurrentUser()
+            .flatMap(userId ->
+                Flux.fromIterable(request.slugs())
+                    .flatMap(slug -> {
+                        String uri = LcmAuthzService.buildUri(request.resolvedType(), slug, request.resolvedTargetBranch());
+                        return authzService.isPermitted(userId, LcmAuthzService.ACTION_MERGE, uri)
+                            .flatMap(permitted -> {
+                                if (!permitted) {
+                                    return Mono.error(new ResponseStatusException(
+                                        HttpStatus.FORBIDDEN,
+                                        String.format("Not permitted to merge into %s/%s on branch %s",
+                                            request.resolvedType(), slug, request.resolvedTargetBranch())
+                                    ));
+                                }
+                                return Mono.just(slug);
+                            });
+                    })
+                    .collectList()
+            )
+            .flatMap(authorizedSlugs -> kernelService.mergeBranches(request).collectList())
             .map(results ->
             {
                 int mergedCount = results.stream().mapToInt(MergeResult::mergedCount).sum();
@@ -409,18 +469,13 @@ public class LcmConsoleController
                 Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
     }
 
+
     // ==================== Search Endpoints ====================
 
     /**
      * 10. Global Search Purpose: Perform full-text search across entity snapshots using the search index.
-     * <p>
-     * Supports multiple search modes: - Full-text search against indexed property values - Slug pattern matching
      *
-     * @param query  the search query string (required)
-     * @param branch optional branch filter
-     * @param type   optional entity type filter
-     * @param mode   search mode: "fulltext" (default) or "slug"
-     * @param limit  maximum results (default 50, max 200)
+     * Future-proofed with optional tenantId/groupId parameter for data isolation.
      */
     @GetMapping("/search")
     public Flux<SearchResult> search(
@@ -428,8 +483,11 @@ public class LcmConsoleController
         @RequestParam(required = false) String branch,
         @RequestParam(required = false) String type,
         @RequestParam(defaultValue = "fulltext") String mode,
-        @RequestParam(defaultValue = "50") int limit)
+        @RequestParam(defaultValue = "50") int limit,
+        @RequestParam(required = false) String tenantId,
+        @RequestParam(required = false) String groupId)
     {
+        // TODO: When multi-tenancy is implemented, filter results by tenantId/groupId
 
         if (query == null || query.isBlank())
         {
@@ -462,6 +520,7 @@ public class LcmConsoleController
         return kernelService.searchFullText(query, branch, type, effectiveLimit)
             .map(SearchResult::fromMap);
     }
+
 
     // ==================== Process Log Endpoints ====================
 
