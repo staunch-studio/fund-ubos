@@ -45,9 +45,10 @@ export interface GetHistoryParams extends ResourceContextRequest {}
 
 export interface BatchCommitRequest {
   slugs: string[];
-  branch: string;
+  branch?: string; // Optional, defaults to "master"
+  entityType?: string; // Optional, defaults to "LOGIC"
   jsonPatch: string;
-  message: string;
+  message?: string; // Optional commit message
 }
 
 export interface BatchCommitResponse {
@@ -97,11 +98,11 @@ export interface CreateBranchResponse {
 // Revert types
 export interface RevertRequest {
   slug: string; // Required: the entity slug identifier
-  type: string; // Required: the entity type (e.g., "LOGIC", "TYPE"), defaults to "LOGIC" if null
-  branch: string; // Required: the branch name (e.g., "master")
-  commitId: number; // Required: the target commit ID to revert to
-  author?: string; // Optional: author of the revert operation
-  message?: string; // Optional: message describing the revert
+  type?: string; // Optional, defaults to "LOGIC"
+  branch?: string; // Optional, defaults to "master"
+  targetCommitId: number; // Required: the target commit ID to revert to
+  author?: string; // Optional
+  message?: string; // Optional
 }
 
 export interface RevertResponse {
@@ -119,11 +120,23 @@ export interface MergeRequest {
   author?: string; // Optional: author of the merge operation
 }
 
+export interface MergeFailure {
+  slug: string; // The slug of the entity that failed to merge
+  error: string; // The error message for this failure
+}
+
 export interface MergeResponse {
-  success: boolean;
-  commitId: number; // The commit ID of the merge commit
-  mergedSlugs: string[]; // List of successfully merged entity slugs
-  message?: string;
+  success: boolean; // Whether the merge operation was successful
+  message?: string; // Overall message about the merge operation
+  sourceBranch?: string; // The source branch that was merged from
+  targetBranch?: string; // The target branch that was merged into
+  mergedCount?: number; // Number of entities successfully merged
+  skippedCount?: number; // Number of entities skipped
+  failedCount?: number; // Number of entities that failed to merge
+  commitId?: number; // The commit ID of the merge commit (if any)
+  mergedSlugs?: string[]; // List of successfully merged entity slugs
+  skippedSlugs?: string[]; // List of skipped entity slugs
+  failures?: MergeFailure[]; // List of failures with error details
 }
 
 // Search types
@@ -196,11 +209,11 @@ export interface SaveEnvironmentResponse {
 
 // Schema types - Schema definitions are commit-able entities
 export interface SchemaCommitRequest {
-  entityType: string; // Required: the entity type (e.g., "LOGIC", "VIEW")
-  schemaDefinition: string; // Required: JSON Schema definition as string
-  branch: string; // Required: the branch to commit to
-  message: string; // Required: commit message
-  author?: string; // Optional: author of the commit
+  targetType: string; // Required: the target entity type (e.g., "LOGIC", "VIEW")
+  jsonSchemaContent: string; // Required: JSON Schema content as string
+  branch?: string; // Optional, defaults to "master"
+  message?: string; // Optional commit message
+  author?: string; // Optional, defaults to "system"
 }
 
 export interface SchemaCommitResponse {
@@ -208,3 +221,65 @@ export interface SchemaCommitResponse {
   commitId: number; // The commit ID of the schema commit
   message?: string;
 }
+
+// Approval Request types - Approval requests are version-chained entities (entityType='APPROVAL_REQUEST')
+export interface ApprovalRequestData {
+  requestId: string; // The slug of the APPROVAL_REQUEST entity
+  targetUri: string; // The UBOS URI of the entity being requested for approval
+  requestedBy: string; // User identifier who requested the approval
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  requestedAt: string; // ISO timestamp
+  approvedBy?: string; // User identifier who approved (if approved)
+  approvedAt?: string; // ISO timestamp (if approved)
+  message?: string; // Optional message/description
+  branch: string; // The branch name where the change is requested
+}
+
+export interface CreateApprovalRequest {
+  targetUri: string; // The UBOS URI of the entity being requested for approval
+  content: Record<string, any>; // Map<String, Object> - The content/changes to be approved (e.g., { snapshotData: "..." })
+  author?: string; // Optional author identifier (defaults to "system" if not provided)
+  message?: string; // Optional message/description (defaults to "Pending approval" if not provided)
+}
+
+export interface CreateApprovalRequestResponse {
+  success: boolean;
+  requestId: string; // The slug of the created APPROVAL_REQUEST entity
+  message?: string;
+}
+
+export interface ApprovalActionRequest {
+  requestId: string; // The slug of the APPROVAL_REQUEST entity
+  approver: string; // The user identifier who is approving/rejecting
+  action: 'approve' | 'reject'; // The action to take
+  reason?: string; // Optional reason (required for reject, optional for approve)
+}
+
+export interface ApprovalActionResponse {
+  success: boolean;
+  requestId: string;
+  status?: 'APPROVED' | 'REJECTED';
+  message?: string;
+  targetCommitId?: number; // Present when approved
+  approver?: string;
+  reason?: string; // Present when rejected
+}
+
+// Approval request detail (from GET /approval/{requestId} or GET /approval/pending)
+export interface ApprovalRequestDetail {
+  requestId: string;
+  targetUri: string;
+  originalPayload: string; // JSON string of the original content
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  requestedBy: string;
+  approver?: string | null;
+  commitMessage?: string;
+  targetCommitId?: number | null;
+  requestedAt: string; // ISO timestamp
+  resolvedAt?: string | null; // ISO timestamp
+  rejectionReason?: string | null;
+}
+
+// Legacy alias for backward compatibility
+export interface ApproveRequest extends ApprovalActionRequest {}
+export interface ApproveRequestResponse extends ApprovalActionResponse {}

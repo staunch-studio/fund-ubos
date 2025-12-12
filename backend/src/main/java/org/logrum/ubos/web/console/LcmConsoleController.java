@@ -8,13 +8,16 @@ import org.logrum.ubos.kernel.model.LcmEntityInstance;
 import org.logrum.ubos.kernel.model.LcmEntityVersionChain;
 import org.logrum.ubos.kernel.repository.LcmEntityRepository;
 import org.logrum.ubos.kernel.repository.LcmVersionRepository;
+import org.logrum.ubos.kernel.service.LcmApprovalService;
 import org.logrum.ubos.kernel.service.LcmAuditService;
 import org.logrum.ubos.kernel.service.LcmEnvironmentService;
 import org.logrum.ubos.kernel.service.LcmKernelService;
 import org.logrum.ubos.kernel.util.JsonSchemaValidator;
 import org.logrum.ubos.kernel.util.SchemaValidationException;
 import org.logrum.ubos.kernel.util.UbosUriUtil;
-import org.logrum.ubos.kernel.util.UbosUriUtil.UbosUriDetails;
+import org.logrum.ubos.web.console.dto.ApprovalActionRequest;
+import org.logrum.ubos.web.console.dto.ApprovalCreateRequest;
+import org.logrum.ubos.web.console.dto.ApprovalRequestPayload;
 import org.logrum.ubos.web.console.dto.BatchCommitRequest;
 import org.logrum.ubos.web.console.dto.BranchCreateRequest;
 import org.logrum.ubos.web.console.dto.BranchInfo;
@@ -55,10 +58,11 @@ public class LcmConsoleController
     private final LcmKernelService kernelService;
     private final LcmAuditService auditService;
     private final LcmEnvironmentService environmentService;
+    private final LcmApprovalService approvalService;
     private final LcmEntityRepository entityRepo;
     private final LcmVersionRepository versionRepo;
     private final JsonSchemaValidator schemaValidator;
-
+    private final ObjectMapper objectMapper;
     /**
      * 1. 获取实体列表 前端 RTK Query: useGetEntitiesQuery
      */
@@ -84,17 +88,22 @@ public class LcmConsoleController
      * /snapshot?type=LOGIC&slug=tax-calc&branch=master
      */
     @GetMapping("/snapshot")
-    public Mono<LcmEntityVersionChain> getSnapshot(ResourceContextRequest request)
+    public Mono<LcmEntityVersionChain> getSnapshot(
+        @RequestParam(required = false) String uri,
+        @RequestParam(required = false) String slug,
+        @RequestParam(required = false, defaultValue = "LOGIC") String type,
+        @RequestParam(required = false, defaultValue = "master") String branch)
     {
         final String resolvedType;
         final String resolvedSlug;
         final String resolvedBranch;
 
-        if (request.hasUri())
+        // URI mode takes priority
+        if (uri != null && !uri.isBlank())
         {
             try
             {
-                var uriDetails = UbosUriUtil.parse(request.uri());
+                var uriDetails = UbosUriUtil.parse(uri);
                 resolvedType = uriDetails.type().toUpperCase();
                 resolvedSlug = uriDetails.slug();
                 resolvedBranch = uriDetails.branch();
@@ -104,18 +113,18 @@ public class LcmConsoleController
             }
             catch (UbosUriUtil.UbosUriParseException e)
             {
-                log.warn("Invalid UBOS URI: {}", request.uri(), e);
+                log.warn("Invalid UBOS URI: {}", uri, e);
                 return Mono.error(new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Invalid UBOS URI format: " + e.getMessage()
                 ));
             }
         }
-        else if (request.hasSlug())
+        else if (slug != null && !slug.isBlank())
         {
-            resolvedSlug = request.slug();
-            resolvedType = request.resolvedType();
-            resolvedBranch = request.resolvedBranch();
+            resolvedSlug = slug;
+            resolvedType = type.toUpperCase();
+            resolvedBranch = branch;
         }
         else
         {
@@ -125,8 +134,13 @@ public class LcmConsoleController
             ));
         }
 
-        return entityRepo.findByEntityTypeAndSlug(resolvedType, resolvedSlug)
-            .flatMap(entity -> versionRepo.findHeadSnapshot(entity.getId(), resolvedBranch))
+        // Use kernelService to leverage branch inheritance (fallback to parent branch)
+        return kernelService.getResourceSnapshot(resolvedType, resolvedSlug, resolvedBranch)
+            .flatMap(snapshotData -> 
+                // We need to return LcmEntityVersionChain, so fetch the full entity
+                entityRepo.findByEntityTypeAndSlug(resolvedType, resolvedSlug)
+                    .flatMap(entity -> findHeadWithFallback(entity.getId(), resolvedBranch))
+            )
             .switchIfEmpty(Mono.error(new ResponseStatusException(
                 HttpStatus.NOT_FOUND,
                 String.format("Snapshot not found for %s/%s on branch '%s'",
@@ -134,6 +148,32 @@ public class LcmConsoleController
             )));
     }
 
+    /**
+     * Find HEAD snapshot with branch inheritance fallback.
+     * If not found in current branch, tries parent branch recursively.
+     */
+    private Mono<LcmEntityVersionChain> findHeadWithFallback(String entityId, String branchName) {
+        return versionRepo.findHeadSnapshot(entityId, branchName)
+            .switchIfEmpty(Mono.defer(() -> 
+                getParentBranch(branchName)
+                    .flatMap(parentBranch -> findHeadWithFallback(entityId, parentBranch))
+            ));
+    }
+
+    /**
+     * Get parent branch name from sys_branch_config.
+     */
+    private Mono<String> getParentBranch(String branchName) {
+        if ("master".equalsIgnoreCase(branchName)) {
+            return Mono.empty(); // master has no parent
+        }
+        // Query parent branch from config
+        return kernelService.getAvailableBranches()
+            .filter(b -> branchName.equals(b.branchName()))
+            .next()
+            .mapNotNull(BranchInfo::parentBranch)
+            .filter(p -> !p.isBlank());
+    }
     /**
      * 3. 获取历史提交记录列表 (用于 History Tab) 前端 RTK Query: useGetHistoryQuery
      * <p>
@@ -853,4 +893,257 @@ public class LcmConsoleController
     {
         return Mono.just(schemaValidator.getCacheStats());
     }
+
+    // ==================== Approval Workflow Endpoints ====================
+
+    /**
+     * 25. Create Approval Request
+     * Purpose: Initiate a commit approval request. The change is staged but not committed until approved.
+     *
+     * <p>Request Body: {
+     *   "targetUri": "ubos://logic/tax-calc?branch=master",
+     *   "content": {"name": "Tax Calculator", "version": "2.0"},
+     *   "author": "developer",
+     *   "message": "Update tax calculation formula"
+     * }
+     *
+     * @param request the approval creation request
+     * @return the generated request ID
+     */
+    @PostMapping("/approval/request")
+    public Mono<Map<String, Object>> createApprovalRequest(@RequestBody ApprovalCreateRequest request)
+    {
+        if (request.targetUri() == null || request.targetUri().isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "targetUri is required"));
+        }
+        if (request.content() == null || request.content().isEmpty())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "content is required"));
+        }
+
+        log.info("📋 Approval request creation: uri={}, author={}",
+            request.targetUri(), request.resolvedAuthor());
+
+        try
+        {
+            // Convert content Map to JSON string
+            String jsonContent = objectMapper.writeValueAsString(request.content());
+
+            return approvalService.requestCommit(
+                    request.targetUri(),
+                    jsonContent,
+                    request.resolvedAuthor(),
+                    request.resolvedMessage()
+                )
+                .map(requestId -> {
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("success", true);
+                    response.put("message", "Approval request created successfully");
+                    response.put("requestId", requestId);
+                    response.put("targetUri", request.targetUri());
+                    response.put("status", ApprovalRequestPayload.STATUS_PENDING);
+                    return response;
+                })
+                .onErrorResume(IllegalArgumentException.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())));
+        }
+        catch (JsonProcessingException e)
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Failed to serialize content: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 26. Approve or Reject Request
+     * Purpose: Process an approval request - either approve (execute the commit) or reject.
+     *
+     * <p>Request Body for Approve: {
+     *   "requestId": "REQ-ABC12345",
+     *   "approver": "admin",
+     *   "action": "approve"
+     * }
+     *
+     * <p>Request Body for Reject: {
+     *   "requestId": "REQ-ABC12345",
+     *   "approver": "admin",
+     *   "action": "reject",
+     *   "reason": "Changes need revision"
+     * }
+     *
+     * @param request the approval action request
+     * @return result of the approval/rejection
+     */
+    @PostMapping("/approval/approve")
+    public Mono<Map<String, Object>> processApprovalRequest(@RequestBody ApprovalActionRequest request)
+    {
+        if (request.requestId() == null || request.requestId().isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "requestId is required"));
+        }
+        if (request.action() == null || request.action().isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "action is required (approve or reject)"));
+        }
+
+        String approver = request.resolvedApprover();
+
+        if (request.isApprove())
+        {
+            log.info("✅ Approving request: {} by {}", request.requestId(), approver);
+
+            return approvalService.approveRequest(request.requestId(), approver)
+                .map(targetCommitId -> {
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("success", true);
+                    response.put("message", "Request approved and committed successfully");
+                    response.put("requestId", request.requestId());
+                    response.put("status", ApprovalRequestPayload.STATUS_APPROVED);
+                    response.put("targetCommitId", targetCommitId);
+                    response.put("approver", approver);
+                    return response;
+                })
+                .onErrorResume(IllegalArgumentException.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage())))
+                .onErrorResume(IllegalStateException.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage())));
+        }
+        else if (request.isReject())
+        {
+            if (request.reason() == null || request.reason().isBlank())
+            {
+                return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "reason is required for rejection"));
+            }
+
+            log.info("❌ Rejecting request: {} by {} - reason: {}",
+                request.requestId(), approver, request.reason());
+
+            return approvalService.rejectRequest(request.requestId(), approver, request.reason())
+                .map(requestId -> {
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("success", true);
+                    response.put("message", "Request rejected");
+                    response.put("requestId", requestId);
+                    response.put("status", ApprovalRequestPayload.STATUS_REJECTED);
+                    response.put("approver", approver);
+                    response.put("reason", request.reason());
+                    return response;
+                })
+                .onErrorResume(IllegalArgumentException.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage())))
+                .onErrorResume(IllegalStateException.class, e ->
+                    Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage())));
+        }
+        else
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Invalid action. Must be 'approve' or 'reject'"));
+        }
+    }
+
+    /**
+     * 27. Get Pending Approval Requests
+     * Purpose: Fetch all approval requests with PENDING status (or filtered by status).
+     *
+     * @param status optional status filter (PENDING, APPROVED, REJECTED, CANCELLED)
+     * @return stream of approval requests
+     */
+    @GetMapping("/approval/pending")
+    public Flux<ApprovalRequestPayload> getPendingApprovals(
+        @RequestParam(required = false) String status)
+    {
+        log.debug("📋 Fetching approval requests, status filter: {}", status);
+
+        if (status == null || status.isBlank() || "PENDING".equalsIgnoreCase(status))
+        {
+            return approvalService.findPending();
+        }
+        return approvalService.findAll(status);
+    }
+
+    /**
+     * 28. Get Approval Request Details
+     * Purpose: Get detailed information about a specific approval request.
+     *
+     * @param requestId the approval request ID
+     * @return the approval request details
+     */
+    @GetMapping("/approval/{requestId}")
+    public Mono<Map<String, Object>> getApprovalRequest(@PathVariable String requestId)
+    {
+        if (requestId == null || requestId.isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "requestId is required"));
+        }
+
+        log.debug("📋 Fetching approval request: {}", requestId);
+
+        return approvalService.getRequest(requestId)
+            .map(payload -> {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("requestId", payload.requestId());
+                response.put("targetUri", payload.targetUri());
+                response.put("status", payload.status());
+                response.put("requestedBy", payload.requestedBy());
+                response.put("approver", payload.approver());
+                response.put("commitMessage", payload.commitMessage());
+                response.put("targetCommitId", payload.targetCommitId());
+                response.put("requestedAt", payload.requestedAt());
+                response.put("resolvedAt", payload.resolvedAt());
+                response.put("rejectionReason", payload.rejectionReason());
+                response.put("originalPayload", payload.originalPayload());
+                return response;
+            })
+            .switchIfEmpty(Mono.error(new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Approval request not found: " + requestId)));
+    }
+
+    /**
+     * 29. Cancel Approval Request
+     * Purpose: Cancel a pending approval request (by the original requester).
+     *
+     * @param requestId the approval request ID
+     * @param author the original requester (for verification)
+     * @return cancellation result
+     */
+    @PostMapping("/approval/{requestId}/cancel")
+    public Mono<Map<String, Object>> cancelApprovalRequest(
+        @PathVariable String requestId,
+        @RequestParam String author)
+    {
+        if (requestId == null || requestId.isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "requestId is required"));
+        }
+        if (author == null || author.isBlank())
+        {
+            return Mono.error(new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "author is required"));
+        }
+
+        log.info("🚫 Cancel approval request: {} by {}", requestId, author);
+
+        return approvalService.cancelRequest(requestId, author)
+            .map(id -> {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("success", true);
+                response.put("message", "Approval request cancelled");
+                response.put("requestId", id);
+                response.put("status", ApprovalRequestPayload.STATUS_CANCELLED);
+                return response;
+            })
+            .onErrorResume(IllegalArgumentException.class, e ->
+                Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())))
+            .onErrorResume(IllegalStateException.class, e ->
+                Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage())));
+    }
+
 }

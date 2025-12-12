@@ -93,17 +93,26 @@ export function BranchMergeModal({ open, onCancel, onSuccess, currentBranch }: B
 
   const handleSubmit = async () => {
     try {
-      // Validate all fields including sourceBranch and targetBranch
-      const values = await form.validateFields()
+      // Get all form values directly (including fields from previous steps)
+      const formValues = form.getFieldsValue()
+      console.log('formValues', formValues)
+      // Validate only the current step's fields (commit message)
+      try {
+        await form.validateFields(['message'])
+      } catch (validationError) {
+        // Validation error will be shown by form, just return
+        return
+      }
       
       // Ensure all required fields are present
-      if (!values.sourceBranch || !values.targetBranch) {
+      // Use formValues which contains all fields from all steps
+      if (!formValues.sourceBranch || !formValues.targetBranch) {
         message.error('Please select both source and target branches')
         setCurrentStep('branch')
         return
       }
       
-      if (!values.message || values.message.trim() === '') {
+      if (!formValues.message || formValues.message.trim() === '') {
         message.error('Please enter a commit message')
         return
       }
@@ -116,29 +125,95 @@ export function BranchMergeModal({ open, onCancel, onSuccess, currentBranch }: B
       
       // Construct the merge request with all required fields
       const mergeRequest = {
-        sourceBranch: values.sourceBranch,
-        targetBranch: values.targetBranch,
+        sourceBranch: formValues.sourceBranch,
+        targetBranch: formValues.targetBranch,
         slugs: selectedSlugs,
-        message: values.message.trim(),
-        ...(values.author && values.author.trim() ? { author: values.author.trim() } : {}),
+        message: formValues.message.trim(),
+        ...(formValues.author && formValues.author.trim() ? { author: formValues.author.trim() } : {}),
       }
       
       console.log('Merge request:', mergeRequest) // Debug log
       
       const result = await merge(mergeRequest).unwrap()
-
-      message.success({
-        content: `Successfully merged ${result.mergedSlugs.length} entity(ies) from ${values.sourceBranch} to ${values.targetBranch}`,
+      
+      // Check if merge was successful
+      if (result.success) {
+        // Success case
+        const mergedCount = result.mergedSlugs?.length || result.mergedCount || 0
+        message.success({
+          content: `Successfully merged ${mergedCount} entity(ies) from ${formValues.sourceBranch} to ${formValues.targetBranch}`,
+          duration: 5,
+        })
+        
+        form.resetFields()
+        setCurrentStep('branch')
+        setSelectedSlugs([])
+        onSuccess?.()
+        onCancel()
+      } else {
+        // Partial success or failure case
+        const mergedCount = result.mergedCount || 0
+        const skippedCount = result.skippedCount || 0
+        const failedCount = result.failedCount || 0
+        
+        // Build detailed error message
+        let errorMessage = result.message || 'Merge completed with errors'
+        
+        // Add failure details if available
+        if (result.failures && result.failures.length > 0) {
+          const failureDetails = result.failures
+            .map((f) => `  • ${f.slug}: ${f.error}`)
+            .join('\n')
+          errorMessage += `\n\nFailures:\n${failureDetails}`
+        }
+        
+        // Show summary
+        const summary = `Merged: ${mergedCount}, Skipped: ${skippedCount}, Failed: ${failedCount}`
+        
+        // Use Modal.error to show detailed error information in a modal dialog
+        Modal.error({
+          title: 'Merge Failed',
+          width: 600,
+          content: (
+            <div style={{ marginTop: '16px' }}>
+              <div style={{ marginBottom: '12px', color: 'rgba(0, 0, 0, 0.85)', whiteSpace: 'pre-wrap' }}>
+                {errorMessage}
+              </div>
+              <div style={{ 
+                padding: '12px', 
+                background: 'rgba(0, 0, 0, 0.02)', 
+                borderRadius: '4px',
+                marginTop: '12px',
+                fontSize: '13px',
+                color: 'rgba(0, 0, 0, 0.65)'
+              }}>
+                <div style={{ marginBottom: '4px', fontWeight: 500 }}>Summary:</div>
+                <div>Merged: {mergedCount}</div>
+                <div>Skipped: {skippedCount}</div>
+                <div style={{ color: '#ff4d4f', fontWeight: 500 }}>Failed: {failedCount}</div>
+              </div>
+            </div>
+          ),
+        })
+        
+        // Don't close the modal on error, let user see the details and try again
+        // Only reset if all entities were successfully merged
+        if (failedCount === 0 && skippedCount === 0) {
+          form.resetFields()
+          setCurrentStep('branch')
+          setSelectedSlugs([])
+          onSuccess?.()
+          onCancel()
+        }
+      }
+    } catch (err: any) {
+      // Handle network errors or other exceptions
+      console.error('Merge error:', err)
+      const errorMessage = err?.data?.message || err?.message || 'Failed to merge branches'
+      message.error({
+        content: errorMessage,
         duration: 5,
       })
-      
-      form.resetFields()
-      setCurrentStep('branch')
-      setSelectedSlugs([])
-      onSuccess?.()
-      onCancel()
-    } catch (err: any) {
-      message.error(err?.data?.message || 'Failed to merge branches')
     }
   }
 
@@ -231,88 +306,88 @@ export function BranchMergeModal({ open, onCancel, onSuccess, currentBranch }: B
         />
       </div>
 
-      <Form form={form} layout="vertical" requiredMark={false}>
-        {/* Step 1: Branch Selection */}
-        {currentStep === 'branch' && (
-          <div>
-            <Form.Item
-              label={
-                <Space>
-                  <Text style={{ color: colorText, fontWeight: 500 }}>Source Branch (FROM)</Text>
-                  <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-                    Select the branch to merge from
-                  </Text>
-                </Space>
+      <Form form={form} layout="vertical" requiredMark={false} preserve={true}>
+        {/* Step 1: Branch Selection - Always render but hide when not in this step */}
+        <div style={{ display: currentStep === 'branch' ? 'block' : 'none' }}>
+          <Form.Item
+            label={
+              <Space>
+                <Text style={{ color: colorText, fontWeight: 500 }}>Source Branch (FROM)</Text>
+                <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
+                  Select the branch to merge from
+                </Text>
+              </Space>
+            }
+            name="sourceBranch"
+            rules={[{ required: true, message: 'Please select a source branch' }]}
+            preserve={true}
+          >
+            <Select
+              placeholder="Select source branch"
+              loading={isLoadingBranches}
+              options={branchNames.map((name) => ({
+                label: (
+                  <Space>
+                    <GitBranch size={14} />
+                    <span>{name}</span>
+                  </Space>
+                ),
+                value: name,
+              }))}
+              notFoundContent={
+                isLoadingBranches ? (
+                  <Text style={{ color: colorTextSecondary }}>Loading branches...</Text>
+                ) : (
+                  <Text style={{ color: colorTextSecondary }}>No branches found</Text>
+                )
               }
-              name="sourceBranch"
-              rules={[{ required: true, message: 'Please select a source branch' }]}
-            >
-              <Select
-                placeholder="Select source branch"
-                loading={isLoadingBranches}
-                options={branchNames.map((name) => ({
-                  label: (
-                    <Space>
-                      <GitBranch size={14} />
-                      <span>{name}</span>
-                    </Space>
-                  ),
-                  value: name,
-                }))}
-                notFoundContent={
-                  isLoadingBranches ? (
-                    <Text style={{ color: colorTextSecondary }}>Loading branches...</Text>
-                  ) : (
-                    <Text style={{ color: colorTextSecondary }}>No branches found</Text>
-                  )
-                }
-              />
-            </Form.Item>
+            />
+          </Form.Item>
 
-            <Form.Item
-              label={
-                <Space>
-                  <Text style={{ color: colorText, fontWeight: 500 }}>Target Branch (TO)</Text>
-                  <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
-                    Select the branch to merge into
-                  </Text>
-                </Space>
-              }
-              name="targetBranch"
-              rules={[{ required: true, message: 'Please select a target branch' }]}
-            >
-              <Select
-                placeholder="Select target branch"
-                loading={isLoadingBranches}
-                options={branchNames.map((name) => ({
-                  label: (
-                    <Space>
-                      <GitBranch size={14} />
-                      <span>{name}</span>
-                    </Space>
-                  ),
-                  value: name,
-                }))}
-              />
-            </Form.Item>
+          <Form.Item
+            label={
+              <Space>
+                <Text style={{ color: colorText, fontWeight: 500 }}>Target Branch (TO)</Text>
+                <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>
+                  Select the branch to merge into
+                </Text>
+              </Space>
+            }
+            name="targetBranch"
+            rules={[{ required: true, message: 'Please select a target branch' }]}
+            preserve={true}
+          >
+            <Select
+              placeholder="Select target branch"
+              loading={isLoadingBranches}
+              options={branchNames.map((name) => ({
+                label: (
+                  <Space>
+                    <GitBranch size={14} />
+                    <span>{name}</span>
+                  </Space>
+                ),
+                value: name,
+              }))}
+            />
+          </Form.Item>
 
-            <div
-              style={{
-                padding: '12px',
-                background: 'rgba(74, 158, 255, 0.05)',
-                borderRadius: '4px',
-                border: `1px solid ${colorBorder}`,
-                marginTop: '16px',
-              }}
-            >
-              <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
-                <ArrowRight size={12} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                Changes from the source branch will be merged into the target branch. Select entities
-                in the next step.
-              </Text>
-            </div>
+          <div
+            style={{
+              padding: '12px',
+              background: 'rgba(74, 158, 255, 0.05)',
+              borderRadius: '4px',
+              border: `1px solid ${colorBorder}`,
+              marginTop: '16px',
+            }}
+          >
+            <Text style={{ fontSize: '12px', color: colorTextSecondary }}>
+              <ArrowRight size={12} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              Changes from the source branch will be merged into the target branch. Select entities
+              in the next step.
+            </Text>
           </div>
-        )}
+        </div>
 
         {/* Step 2: Entity Selection */}
         {currentStep === 'entities' && (

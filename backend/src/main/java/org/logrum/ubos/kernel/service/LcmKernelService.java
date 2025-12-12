@@ -6,21 +6,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.annotation.PostConstruct;
 import org.logrum.ubos.kernel.model.LcmEntityInstance;
-import org.logrum.ubos.kernel.model.LcmEntitySearchIndex;
 import org.logrum.ubos.kernel.model.LcmEntityVersionChain;
 import org.logrum.ubos.kernel.repository.LcmEntityRepository;
 import org.logrum.ubos.kernel.repository.LcmSearchIndexRepository;
 import org.logrum.ubos.kernel.repository.LcmVersionRepository;
 import org.logrum.ubos.kernel.util.JsonSchemaValidator;
 import org.logrum.ubos.kernel.util.ReactiveRetry;
+import org.logrum.ubos.kernel.util.UbosUriUtil;
 import org.logrum.ubos.web.console.dto.BranchInfo;
 import org.logrum.ubos.web.console.dto.MergeRequest;
 import org.logrum.ubos.web.console.dto.MergeResult;
 import org.logrum.ubos.web.console.dto.RevertRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.logrum.ubos.kernel.util.UbosUriUtil;
-import org.logrum.ubos.kernel.util.UbosUriUtil.UbosUriDetails;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,7 +26,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -45,6 +42,7 @@ public class LcmKernelService {
     private final JsonSchemaValidator schemaValidator;
     private final ApiKeyService apiKeyService;
     private final WebhookService webhookService;
+    private final LcmApprovalService approvalService;
 
     private final Retry retryPolicy = ReactiveRetry.databaseTransientErrors();
 
@@ -56,6 +54,7 @@ public class LcmKernelService {
         schemaValidator.setSchemaFetcher(this::getResourceSnapshot);
         apiKeyService.setKernelService(this);
         webhookService.setKernelService(this);
+        approvalService.setKernelService(this);
         log.info("📋 Kernel service initialized with schema validator, API key service, and webhook service");
     }
 
@@ -586,8 +585,8 @@ public class LcmKernelService {
      */
     @Transactional
     public Mono<Long> mergeBranch(String sourceBranch, String targetBranch,
-                                   String type, String slug,
-                                   String author, String message) {
+        String type, String slug,
+        String author, String message) {
         log.info("🔀 Merging {}/{}@{} -> {}", type, slug, sourceBranch, targetBranch);
 
         return entityRepo.findByEntityTypeAndSlug(type, slug)
@@ -598,18 +597,25 @@ public class LcmKernelService {
                     .map(LcmEntityVersionChain::getSnapshotData)
                     .defaultIfEmpty("{}");
 
-                Mono<String> sourceSnapshotMono = versionRepo.findHeadSnapshot(entity.getId(), sourceBranch)
-                    .map(LcmEntityVersionChain::getSnapshotData)
-                    .switchIfEmpty(Mono.error(new IllegalArgumentException(
-                        String.format("No HEAD found for %s/%s on source branch '%s'", type, slug, sourceBranch))));
+                // Use branch inheritance to get source snapshot (same as getResourceSnapshot)
+                Mono<String> sourceSnapshotMono = findInBranchRecursive(type, slug, sourceBranch);
 
-                return Mono.zip(targetSnapshotMono, sourceSnapshotMono)
+                return sourceSnapshotMono
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                        String.format("No snapshot found for %s/%s on source branch '%s'", type, slug, sourceBranch))))
+                    .zipWith(targetSnapshotMono)
                     .flatMap(tuple -> {
-                        String targetJson = tuple.getT1();
-                        String sourceJson = tuple.getT2();
+                        String sourceJson = tuple.getT1();
+                        String targetJson = tuple.getT2();
+
+                        log.debug("🔍 Source JSON length: {}, Target JSON length: {}",
+                            sourceJson.length(), targetJson.length());
 
                         try {
                             String mergedJson = mergeJsonContent(targetJson, sourceJson);
+
+                            log.debug("🔍 Merged JSON length: {}, equals target: {}",
+                                mergedJson.length(), mergedJson.equals(targetJson));
 
                             if (mergedJson.equals(targetJson)) {
                                 log.info("⏭️ No changes to merge for {}/{}@{} -> {}",
@@ -619,7 +625,7 @@ public class LcmKernelService {
 
                             String mergeMessage = (message == null || message.isBlank())
                                 ? String.format("Merge '%s' into '%s' for %s/%s",
-                                    sourceBranch, targetBranch, type, slug)
+                                sourceBranch, targetBranch, type, slug)
                                 : message;
 
                             // Validate merged content against schema before commit
@@ -634,7 +640,6 @@ public class LcmKernelService {
             })
             .retryWhen(retryPolicy);
     }
-
     /**
      * Merge JSON content using a "Source Wins" strategy.
      *
@@ -643,6 +648,7 @@ public class LcmKernelService {
      *   <li>All top-level fields from source are applied to target</li>
      *   <li>Source values override target values for conflicting keys</li>
      *   <li>Target-only fields are preserved</li>
+     *   <li>For arrays: source array completely replaces target array</li>
      * </ul>
      *
      * @param targetJson the target branch JSON (base)
@@ -665,7 +671,17 @@ public class LcmKernelService {
             return targetJson;
         }
 
-        // Perform merge: source wins for conflicts
+        // If source is an array, it completely replaces target (source wins)
+        if (sourceNode.isArray()) {
+            return sourceJson;
+        }
+
+        // If target is an array but source is an object, source wins
+        if (targetNode.isArray()) {
+            return sourceJson;
+        }
+
+        // Both are objects - perform deep merge: source wins for conflicts
         ObjectNode mergedNode = deepMerge(
             (ObjectNode) targetNode.deepCopy(),
             (ObjectNode) sourceNode

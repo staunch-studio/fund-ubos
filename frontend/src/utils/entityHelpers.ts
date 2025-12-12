@@ -171,3 +171,66 @@ export function entityToEnvironment(entity: EntityInstance): Partial<Environment
   }
 }
 
+// Approval Request entity structure (entityType='APPROVAL_REQUEST')
+export interface ApprovalRequestData {
+  requestId: string // The slug of the APPROVAL_REQUEST entity
+  targetUri: string // The UBOS URI of the entity being requested for approval
+  requestedBy: string // User identifier who requested the approval
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+  requestedAt: string // ISO timestamp
+  approvedBy?: string // User identifier who approved (if approved)
+  approvedAt?: string // ISO timestamp (if approved)
+  message?: string // Optional message/description
+  branch: string // The branch name where the change is requested
+}
+
+/**
+ * Parse ApprovalRequestData from EntitySnapshot
+ */
+export function parseApprovalRequestFromSnapshot(snapshot: EntitySnapshot): ApprovalRequestData | null {
+  try {
+    const data = JSON.parse(snapshot.snapshotData)
+    return {
+      requestId: data.requestId || snapshot.entityId,
+      targetUri: data.targetUri || '',
+      requestedBy: data.requestedBy || '',
+      status: (data.status || 'PENDING') as ApprovalRequestData['status'],
+      requestedAt: data.requestedAt || snapshot.createdAt || new Date().toISOString(),
+      approvedBy: data.approvedBy,
+      approvedAt: data.approvedAt,
+      message: data.message,
+      branch: data.branch || '',
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Format ApprovalRequestData to JSON string for snapshotData
+ */
+export function formatApprovalRequestToSnapshotData(requestData: ApprovalRequestData): string {
+  return JSON.stringify({
+    requestId: requestData.requestId,
+    targetUri: requestData.targetUri,
+    requestedBy: requestData.requestedBy,
+    status: requestData.status,
+    requestedAt: requestData.requestedAt,
+    approvedBy: requestData.approvedBy,
+    approvedAt: requestData.approvedAt,
+    message: requestData.message,
+    branch: requestData.branch,
+  })
+}
+
+/**
+ * Convert EntityInstance to ApprovalRequestData (for table display)
+ * Note: This only uses metadata, full data requires fetching snapshot
+ */
+export function entityToApprovalRequest(entity: EntityInstance): Partial<ApprovalRequestData> {
+  return {
+    requestId: entity.slug, // slug is the requestId
+    requestedAt: entity.createdAt,
+  }
+}
+

@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -13,10 +13,11 @@ import { SearchResultsModal } from './SearchResultsModal'
 import { ProcessLogViewer } from './ProcessLogViewer'
 import { EnvironmentManager } from './EnvironmentManager'
 import { SchemaManager } from './SchemaManager'
+import { ApprovalManager } from './ApprovalManager'
 import type { EntityInstance } from '../types/ubos'
-import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery } from '../store/ubosApi'
+import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
 import { message } from 'antd'
-import { buildUbosUri } from '../utils/useUbosUri'
+import { buildUbosUri, parseUbosUri } from '../utils/useUbosUri'
 import './UbosStudioLayout.css'
 
 const { Header, Sider, Content } = Layout
@@ -64,11 +65,12 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals'>('entities')
   
   const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
   const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
+  const [createApprovalRequest] = useCreateApprovalRequestMutation()
 
   // Fetch branches from API
   const { data: branchesData = [], isLoading: isLoadingBranches } = useGetBranchesQuery()
@@ -105,6 +107,9 @@ export function UbosStudioLayout({
     } else if (e.key === 'schema') {
       setActiveView('schema')
       setSelectedEntityType(undefined)
+    } else if (e.key === 'approvals') {
+      setActiveView('approvals')
+      setSelectedEntityType(undefined)
     } else if (e.key === 'all') {
       setActiveView('entities')
       setSelectedEntityType(undefined)
@@ -134,6 +139,14 @@ export function UbosStudioLayout({
     message.info(`Selected: ${result.slug}`)
   }
 
+  // Check if a branch is protected (requires approval)
+  // For now, we'll consider 'master' and 'main' as protected branches
+  // This can be extended to fetch from backend or configuration
+  const isProtectedBranch = (branch: string): boolean => {
+    const protectedBranches = ['master', 'main', 'production', 'prod']
+    return protectedBranches.includes(branch.toLowerCase())
+  }
+
   const handleCommit = async () => {
     if (!activeResourceUri) {
       message.warning('Please select a resource to commit')
@@ -154,31 +167,59 @@ export function UbosStudioLayout({
         return
       }
 
-      const jsonPatch = JSON.stringify([
-        {
-          op: 'replace',
-          path: '/snapshotData',
-          value: snapshotData,
-        },
-      ])
+      const targetBranch = uriDetails.branch || currentBranch
 
-      await batchCommit({
-        slugs: [uriDetails.slug],
-        branch: uriDetails.branch || currentBranch,
-        jsonPatch,
-        message: commitMessage || `Update ${uriDetails.slug}`,
-      }).unwrap()
+      // Check if branch is protected
+      if (isProtectedBranch(targetBranch)) {
+        // Create approval request instead of direct commit
+        // Backend expects: { targetUri, content: Map<String, Object>, author?, message? }
+        const approvalResponse = await createApprovalRequest({
+          targetUri: activeResourceUri,
+          content: {
+            snapshotData: snapshotData, // The new snapshot data to be approved
+          },
+          author: undefined, // Optional - backend defaults to "system"
+          message: commitMessage || `Update ${uriDetails.slug}`,
+        }).unwrap()
 
-      message.success({
-        content: `Successfully committed changes to ${activeResourceUri}`,
-        duration: 2,
-      })
-      setCommitMessage('')
-      setEditedSnapshotData((prev) => {
-        const updated = { ...prev }
-        delete updated[activeResourceUri]
-        return updated
-      })
+        message.success({
+          content: `Approval request created: ${approvalResponse.requestId}. Waiting for approval...`,
+          duration: 3,
+        })
+        setCommitMessage('')
+        setEditedSnapshotData((prev) => {
+          const updated = { ...prev }
+          delete updated[activeResourceUri]
+          return updated
+        })
+      } else {
+        // Direct commit for non-protected branches
+        const jsonPatch = JSON.stringify([
+          {
+            op: 'replace',
+            path: '/snapshotData',
+            value: snapshotData,
+          },
+        ])
+
+        await batchCommit({
+          slugs: [uriDetails.slug],
+          branch: targetBranch,
+          jsonPatch,
+          message: commitMessage || `Update ${uriDetails.slug}`,
+        }).unwrap()
+
+        message.success({
+          content: `Successfully committed changes to ${activeResourceUri}`,
+          duration: 2,
+        })
+        setCommitMessage('')
+        setEditedSnapshotData((prev) => {
+          const updated = { ...prev }
+          delete updated[activeResourceUri]
+          return updated
+        })
+      }
     } catch (err: any) {
       message.error(err?.data?.message || 'Failed to commit changes')
     }
@@ -254,6 +295,15 @@ export function UbosStudioLayout({
         label: (
           <span style={{ fontWeight: activeView === 'schema' ? 500 : 400 }}>
             Schema Manager
+          </span>
+        ),
+      },
+      {
+        key: 'approvals',
+        icon: <ShieldCheck size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'approvals' ? 500 : 400 }}>
+            Approvals
           </span>
         ),
       },
@@ -402,7 +452,7 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
@@ -414,6 +464,8 @@ export function UbosStudioLayout({
                 ? ['environments']
                 : activeView === 'schema'
                 ? ['schema']
+                : activeView === 'approvals'
+                ? ['approvals']
                 : selectedEntityType
                 ? [selectedEntityType]
                 : ['all']
@@ -443,6 +495,8 @@ export function UbosStudioLayout({
             <EnvironmentManager currentBranch={currentBranch} />
           ) : activeView === 'schema' ? (
             <SchemaManager availableEntityTypes={entityTypes} currentBranch={currentBranch} />
+          ) : activeView === 'approvals' ? (
+            <ApprovalManager currentBranch={currentBranch} />
           ) : (
           <SplitPane
             split="vertical"

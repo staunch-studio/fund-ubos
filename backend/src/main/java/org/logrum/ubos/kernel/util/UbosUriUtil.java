@@ -1,7 +1,6 @@
+
 package org.logrum.ubos.kernel.util;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -11,40 +10,58 @@ import java.util.Map;
 /**
  * Utility class for parsing and building canonical UBOS URIs.
  * <p>
- * The UBOS URI format follows the pattern: {@code ubos://type/slug?branch=name&cid=commit_id}
+ * The UBOS URI format follows the pattern: 
+ * {@code ubos://{scope}/{entity_type}/{entity_id}?{modifiers}}
  * <p>
  * Components:
  * <ul>
  *   <li><b>Scheme:</b> Always {@code ubos}</li>
- *   <li><b>Type:</b> The entity type (e.g., "logic", "type", "data")</li>
- *   <li><b>Slug:</b> The unique identifier for the entity</li>
+ *   <li><b>Scope:</b> The Tenant ID or App ID (e.g., "default", "tenant_01", "app_core")</li>
+ *   <li><b>Type:</b> The entity type (e.g., "logic", "user", "config")</li>
+ *   <li><b>Slug:</b> The unique identifier for the entity (entity_id)</li>
  *   <li><b>Branch:</b> Optional query parameter, defaults to "master"</li>
- *   <li><b>Commit ID (cid):</b> Optional query parameter for time-travel queries</li>
+ *   <li><b>Commit:</b> Optional query parameter for time-travel queries (commit hash/id)</li>
+ *   <li><b>Tag:</b> Optional query parameter for release tag</li>
+ *   <li><b>Key:</b> Optional query parameter to extract specific property path</li>
  * </ul>
  * <p>
  * Examples:
  * <ul>
- *   <li>{@code ubos://logic/tax-calc?branch=master}</li>
- *   <li>{@code ubos://type/user-profile?branch=development&cid=12345}</li>
- *   <li>{@code ubos://data/order-001}</li>
+ *   <li>{@code ubos://default/logic/tax-calc?branch=master}</li>
+ *   <li>{@code ubos://tenant_01/user/user-001?branch=development&commit=12345}</li>
+ *   <li>{@code ubos://app_core/config/global_settings?branch=dev&key=feature_flags.ai_enabled}</li>
  * </ul>
+ * <p>
+ * IMPORTANT: This class does NOT use java.net.URI as ubos:// is a custom protocol.
  *
  * @author UBOS Kernel Team
- * @since 1.0
+ * @since 2.0
  */
 public final class UbosUriUtil {
 
     /** The required URI scheme for UBOS resources. */
-    private static final String UBOS_SCHEME = "ubos";
+    public static final String UBOS_SCHEME = "ubos";
+
+    /** The scheme prefix including "://" */
+    private static final String SCHEME_PREFIX = UBOS_SCHEME + "://";
+
+    /** The default scope when not specified. */
+    public static final String DEFAULT_SCOPE = "default";
 
     /** The default branch name when not specified. */
-    private static final String DEFAULT_BRANCH = "master";
+    public static final String DEFAULT_BRANCH = "master";
 
     /** Query parameter key for branch. */
-    private static final String PARAM_BRANCH = "branch";
+    public static final String PARAM_BRANCH = "branch";
 
     /** Query parameter key for commit ID (time travel). */
-    private static final String PARAM_CID = "cid";
+    public static final String PARAM_COMMIT = "commit";
+
+    /** Query parameter key for release tag. */
+    public static final String PARAM_TAG = "tag";
+
+    /** Query parameter key for property path extraction. */
+    public static final String PARAM_KEY = "key";
 
     /**
      * Private constructor to prevent instantiation of this utility class.
@@ -59,23 +76,32 @@ public final class UbosUriUtil {
      * This record provides immutable storage for all URI components with built-in
      * validation in the compact constructor.
      *
-     * @param type     the entity type (e.g., "logic", "type", "data"), never null or blank
-     * @param slug     the entity slug identifier, never null or blank
+     * @param scope    the scope/tenant ID (e.g., "default", "tenant_01"), never null or blank
+     * @param type     the entity type (e.g., "logic", "user", "config"), never null or blank
+     * @param slug     the entity slug/id identifier, never null or blank
      * @param branch   the branch name, defaults to "master" if null or blank
      * @param commitId the optional commit ID for time-travel queries, may be null
+     * @param tag      the optional release tag, may be null
+     * @param key      the optional property path to extract, may be null
      */
     public record UbosUriDetails(
+        String scope,
         String type,
         String slug,
         String branch,
-        Long commitId
+        Long commitId,
+        String tag,
+        String key
     ) {
         /**
          * Compact constructor with validation and default value assignment.
          *
-         * @throws IllegalArgumentException if type or slug is null or blank
+         * @throws IllegalArgumentException if scope, type, or slug is null or blank
          */
         public UbosUriDetails {
+            if (scope == null || scope.isBlank()) {
+                scope = DEFAULT_SCOPE;
+            }
             if (type == null || type.isBlank()) {
                 throw new IllegalArgumentException("Type cannot be null or blank");
             }
@@ -85,18 +111,30 @@ public final class UbosUriUtil {
             if (branch == null || branch.isBlank()) {
                 branch = DEFAULT_BRANCH;
             }
-            // commitId can be null (optional for time travel)
+            // commitId, tag, key can be null (optional)
         }
 
         /**
-         * Convenience constructor without commit ID.
+         * Convenience constructor with minimal required fields.
          *
          * @param type   the entity type
          * @param slug   the entity slug identifier
          * @param branch the branch name
          */
         public UbosUriDetails(String type, String slug, String branch) {
-            this(type, slug, branch, null);
+            this(DEFAULT_SCOPE, type, slug, branch, null, null, null);
+        }
+
+        /**
+         * Convenience constructor with scope, type, slug, and branch.
+         *
+         * @param scope  the scope/tenant ID
+         * @param type   the entity type
+         * @param slug   the entity slug identifier
+         * @param branch the branch name
+         */
+        public UbosUriDetails(String scope, String type, String slug, String branch) {
+            this(scope, type, slug, branch, null, null, null);
         }
 
         /**
@@ -109,28 +147,47 @@ public final class UbosUriUtil {
         }
 
         /**
+         * Checks if this URI details has a tag.
+         *
+         * @return true if a tag is present, false otherwise
+         */
+        public boolean hasTag() {
+            return tag != null && !tag.isBlank();
+        }
+
+        /**
+         * Checks if this URI details has a key path for property extraction.
+         *
+         * @return true if a key is present, false otherwise
+         */
+        public boolean hasKey() {
+            return key != null && !key.isBlank();
+        }
+
+        /**
          * Builds the URI string representation of this details object.
          *
          * @return the canonical UBOS URI string
          */
         public String toUriString() {
-            return commitId != null
-                ? UbosUriUtil.build(type, slug, branch, commitId)
-                : UbosUriUtil.build(type, slug, branch);
+            return UbosUriUtil.build(this);
         }
     }
 
     /**
-     * Parses a UBOS URI string into its component parts.
+     * Parses a UBOS URI string into its component parts using pure string parsing.
      * <p>
-     * The URI must follow the format: {@code ubos://type/slug?branch=name&cid=commit_id}
+     * The URI must follow the format: 
+     * {@code ubos://scope/type/slug?branch=name&commit=id&tag=v1&key=path}
      * <p>
      * Parsing rules:
      * <ul>
      *   <li>Scheme must be exactly "ubos" (case-insensitive)</li>
      *   <li>Path must contain at least two segments: type and slug</li>
+     *   <li>If three segments: scope/type/slug</li>
+     *   <li>If two segments: type/slug (scope defaults to "default")</li>
      *   <li>Branch defaults to "master" if not provided</li>
-     *   <li>Commit ID (cid) is optional</li>
+     *   <li>Commit, tag, and key are optional</li>
      * </ul>
      *
      * @param uriString the full UBOS URI string to parse
@@ -142,53 +199,75 @@ public final class UbosUriUtil {
             throw new UbosUriParseException("URI cannot be null or blank");
         }
 
-        URI uri;
-        try {
-            uri = new URI(uriString);
-        } catch (URISyntaxException e) {
-            throw new UbosUriParseException("Invalid URI syntax: " + uriString, e);
+        String trimmed = uriString.trim();
+
+        // Validate and extract scheme
+        int schemeEnd = trimmed.indexOf("://");
+        if (schemeEnd < 0) {
+            throw new UbosUriParseException("Invalid URI format: missing '://' in URI: " + uriString);
         }
 
-        // Validate scheme - must be exactly "ubos"
-        var scheme = uri.getScheme();
-        if (scheme == null || !UBOS_SCHEME.equalsIgnoreCase(scheme)) {
+        String scheme = trimmed.substring(0, schemeEnd);
+        if (!UBOS_SCHEME.equalsIgnoreCase(scheme)) {
             throw new UbosUriParseException(
                 "Invalid scheme: expected 'ubos' but got '" + scheme + "' in URI: " + uriString
             );
         }
 
-        // Extract and validate path segments (type and slug)
-        var path = uri.getPath();
-        if (path == null || path.isBlank()) {
-            // If path is empty, check if host contains the path info (ubos://type/slug format)
-            var host = uri.getHost();
-            path = uri.getPath();
-            if (host != null && path != null) {
-                path = "/" + host + path;
-            } else {
-                throw new UbosUriParseException("Missing path in URI: " + uriString);
+        // Extract the rest after "ubos://"
+        String rest = trimmed.substring(schemeEnd + 3);
+        if (rest.isBlank()) {
+            throw new UbosUriParseException("Missing path after scheme in URI: " + uriString);
+        }
+
+        // Split path and query
+        String pathPart;
+        String queryPart = null;
+        int queryStart = rest.indexOf('?');
+        if (queryStart >= 0) {
+            pathPart = rest.substring(0, queryStart);
+            if (queryStart + 1 < rest.length()) {
+                queryPart = rest.substring(queryStart + 1);
             }
+        } else {
+            pathPart = rest;
         }
 
-        // Handle the authority part for ubos://type/slug format
-        var fullPath = path;
-        if (uri.getHost() != null) {
-            fullPath = "/" + uri.getHost() + path;
+        if (pathPart.isBlank()) {
+            throw new UbosUriParseException("Missing path in URI: " + uriString);
         }
 
-        // Remove leading slash and split path into segments
-        var cleanPath = fullPath.startsWith("/") ? fullPath.substring(1) : fullPath;
-        var segments = cleanPath.split("/");
+        // Split path into segments (handle leading slash if present)
+        String cleanPath = pathPart.startsWith("/") ? pathPart.substring(1) : pathPart;
+        String[] segments = cleanPath.split("/");
+
+        // Filter out empty segments
+        segments = filterEmptySegments(segments);
 
         if (segments.length < 2) {
             throw new UbosUriParseException(
-                "Path must contain type and slug (e.g., /logic/tax-calc), got: " + fullPath
+                "Path must contain at least type and slug (e.g., ubos://default/logic/tax-calc), got: " + pathPart
             );
         }
 
-        var type = URLDecoder.decode(segments[0], StandardCharsets.UTF_8);
-        var slug = URLDecoder.decode(segments[1], StandardCharsets.UTF_8);
+        // Parse segments based on count
+        String scope;
+        String type;
+        String slug;
 
+        if (segments.length >= 3) {
+            // Full format: scope/type/slug
+            scope = urlDecode(segments[0]);
+            type = urlDecode(segments[1]);
+            slug = urlDecode(segments[2]);
+        } else {
+            // Short format: type/slug (scope defaults to "default")
+            scope = DEFAULT_SCOPE;
+            type = urlDecode(segments[0]);
+            slug = urlDecode(segments[1]);
+        }
+
+        // Validate extracted values
         if (type.isBlank()) {
             throw new UbosUriParseException("Type cannot be blank in URI: " + uriString);
         }
@@ -197,85 +276,185 @@ public final class UbosUriUtil {
         }
 
         // Parse query parameters
-        var queryParams = parseQueryParams(uri.getRawQuery());
+        Map<String, String> queryParams = parseQueryParams(queryPart);
 
-        // Extract branch with default fallback
-        var branch = queryParams.getOrDefault(PARAM_BRANCH, DEFAULT_BRANCH);
+        // Extract parameters with defaults
+        String branch = queryParams.getOrDefault(PARAM_BRANCH, DEFAULT_BRANCH);
         if (branch.isBlank()) {
             branch = DEFAULT_BRANCH;
         }
 
         // Extract optional commit ID
         Long commitId = null;
-        var cidStr = queryParams.get(PARAM_CID);
-        if (cidStr != null && !cidStr.isBlank()) {
+        String commitStr = queryParams.get(PARAM_COMMIT);
+        if (commitStr != null && !commitStr.isBlank()) {
             try {
-                commitId = Long.parseLong(cidStr);
+                commitId = Long.parseLong(commitStr);
             } catch (NumberFormatException e) {
                 throw new UbosUriParseException(
-                    "Invalid commit ID format: expected a number but got '" + cidStr + "' in URI: " + uriString,
+                    "Invalid commit ID format: expected a number but got '" + commitStr + "' in URI: " + uriString,
                     e
                 );
             }
         }
 
-        return new UbosUriDetails(type.toLowerCase(), slug, branch, commitId);
+        // Extract optional tag
+        String tag = queryParams.get(PARAM_TAG);
+        if (tag != null && tag.isBlank()) {
+            tag = null;
+        }
+
+        // Extract optional key
+        String key = queryParams.get(PARAM_KEY);
+        if (key != null && key.isBlank()) {
+            key = null;
+        }
+
+        return new UbosUriDetails(scope, type.toLowerCase(), slug, branch, commitId, tag, key);
     }
 
     /**
-     * Builds a UBOS URI string from the given components.
-     * <p>
-     * Constructs a URI in the format: {@code ubos://type/slug?branch=name}
+     * Builds a UBOS URI string from the given UbosUriDetails.
      *
-     * @param type   the entity type (e.g., "logic", "type")
+     * @param details the URI details to build from
+     * @return the constructed canonical URI string
+     * @throws IllegalArgumentException if details is null
+     */
+    public static String build(UbosUriDetails details) {
+        if (details == null) {
+            throw new IllegalArgumentException("Details cannot be null");
+        }
+        return build(
+            details.scope(),
+            details.type(),
+            details.slug(),
+            details.branch(),
+            details.commitId(),
+            details.tag(),
+            details.key()
+        );
+    }
+
+    /**
+     * Builds a UBOS URI string from the given components (minimal version).
+     * <p>
+     * Constructs a URI in the format: {@code ubos://scope/type/slug?branch=name}
+     *
+     * @param type   the entity type (e.g., "logic", "user")
      * @param slug   the entity slug identifier
      * @param branch the branch name (defaults to "master" if null or blank)
      * @return the constructed canonical URI string
      * @throws IllegalArgumentException if type or slug is null or blank
      */
     public static String build(String type, String slug, String branch) {
-        if (type == null || type.isBlank()) {
-            throw new IllegalArgumentException("Type cannot be null or blank");
-        }
-        if (slug == null || slug.isBlank()) {
-            throw new IllegalArgumentException("Slug cannot be null or blank");
-        }
-        if (branch == null || branch.isBlank()) {
-            branch = DEFAULT_BRANCH;
-        }
+        return build(DEFAULT_SCOPE, type, slug, branch, null, null, null);
+    }
 
-        var encodedType = URLEncoder.encode(type.toLowerCase(), StandardCharsets.UTF_8);
-        var encodedSlug = URLEncoder.encode(slug, StandardCharsets.UTF_8)
-            .replace("+", "%20"); // Spaces should be %20, not +
-        var encodedBranch = URLEncoder.encode(branch, StandardCharsets.UTF_8);
-
-        return String.format("%s://%s/%s?%s=%s",
-            UBOS_SCHEME,
-            encodedType,
-            encodedSlug,
-            PARAM_BRANCH,
-            encodedBranch
-        );
+    /**
+     * Builds a UBOS URI string with scope, type, slug, and branch.
+     *
+     * @param scope  the scope/tenant ID
+     * @param type   the entity type
+     * @param slug   the entity slug identifier
+     * @param branch the branch name
+     * @return the constructed canonical URI string
+     */
+    public static String build(String scope, String type, String slug, String branch) {
+        return build(scope, type, slug, branch, null, null, null);
     }
 
     /**
      * Builds a UBOS URI string including a specific commit ID for time travel.
-     * <p>
-     * Constructs a URI in the format: {@code ubos://type/slug?branch=name&cid=commit_id}
      *
      * @param type     the entity type
      * @param slug     the entity slug identifier
      * @param branch   the branch name
      * @param commitId the specific commit ID (if null, omitted from URI)
      * @return the constructed canonical URI string with optional commit ID
-     * @throws IllegalArgumentException if type or slug is null or blank
      */
     public static String build(String type, String slug, String branch, Long commitId) {
-        var baseUri = build(type, slug, branch);
-        if (commitId != null) {
-            return baseUri + "&" + PARAM_CID + "=" + commitId;
+        return build(DEFAULT_SCOPE, type, slug, branch, commitId, null, null);
+    }
+
+    /**
+     * Builds a full UBOS URI string with all optional parameters.
+     *
+     * @param scope    the scope/tenant ID (defaults to "default" if null/blank)
+     * @param type     the entity type
+     * @param slug     the entity slug identifier
+     * @param branch   the branch name (defaults to "master" if null/blank)
+     * @param commitId the specific commit ID (optional)
+     * @param tag      the release tag (optional)
+     * @param key      the property path to extract (optional)
+     * @return the constructed canonical URI string
+     * @throws IllegalArgumentException if type or slug is null or blank
+     */
+    public static String build(String scope, String type, String slug, String branch,
+                               Long commitId, String tag, String key) {
+        if (type == null || type.isBlank()) {
+            throw new IllegalArgumentException("Type cannot be null or blank");
         }
-        return baseUri;
+        if (slug == null || slug.isBlank()) {
+            throw new IllegalArgumentException("Slug cannot be null or blank");
+        }
+
+        String resolvedScope = (scope == null || scope.isBlank()) ? DEFAULT_SCOPE : scope;
+        String resolvedBranch = (branch == null || branch.isBlank()) ? DEFAULT_BRANCH : branch;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(SCHEME_PREFIX);
+        sb.append(urlEncode(resolvedScope));
+        sb.append("/");
+        sb.append(urlEncode(type.toLowerCase()));
+        sb.append("/");
+        sb.append(urlEncode(slug));
+
+        // Build query string
+        StringBuilder query = new StringBuilder();
+        query.append(PARAM_BRANCH).append("=").append(urlEncode(resolvedBranch));
+
+        if (commitId != null) {
+            query.append("&").append(PARAM_COMMIT).append("=").append(commitId);
+        }
+        if (tag != null && !tag.isBlank()) {
+            query.append("&").append(PARAM_TAG).append("=").append(urlEncode(tag));
+        }
+        if (key != null && !key.isBlank()) {
+            query.append("&").append(PARAM_KEY).append("=").append(urlEncode(key));
+        }
+
+        sb.append("?").append(query);
+        return sb.toString();
+    }
+
+    /**
+     * Filters out empty strings from an array.
+     */
+    private static String[] filterEmptySegments(String[] segments) {
+        return java.util.Arrays.stream(segments)
+            .filter(s -> s != null && !s.isBlank())
+            .toArray(String[]::new);
+    }
+
+    /**
+     * URL-decode a string safely.
+     */
+    private static String urlDecode(String value) {
+        if (value == null) {
+            return null;
+        }
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * URL-encode a string for use in URI, replacing spaces with %20.
+     */
+    private static String urlEncode(String value) {
+        if (value == null) {
+            return null;
+        }
+        return URLEncoder.encode(value, StandardCharsets.UTF_8)
+            .replace("+", "%20"); // Spaces should be %20, not +
     }
 
     /**
@@ -287,19 +466,22 @@ public final class UbosUriUtil {
      * @return a map of parameter names to values, empty if query is null or blank
      */
     private static Map<String, String> parseQueryParams(String query) {
-        var params = new HashMap<String, String>();
+        Map<String, String> params = new HashMap<>();
         if (query == null || query.isBlank()) {
             return params;
         }
 
-        for (var pair : query.split("&")) {
-            var idx = pair.indexOf('=');
+        for (String pair : query.split("&")) {
+            int idx = pair.indexOf('=');
             if (idx > 0) {
-                var key = URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8);
-                var value = idx < pair.length() - 1
-                    ? URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8)
+                String paramKey = urlDecode(pair.substring(0, idx));
+                String paramValue = idx < pair.length() - 1
+                    ? urlDecode(pair.substring(idx + 1))
                     : "";
-                params.put(key, value);
+                params.put(paramKey, paramValue);
+            } else if (!pair.isBlank()) {
+                // Handle flags without values (e.g., "?flag")
+                params.put(urlDecode(pair), "");
             }
         }
         return params;
