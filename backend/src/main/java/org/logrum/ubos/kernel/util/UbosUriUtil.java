@@ -49,7 +49,7 @@ public final class UbosUriUtil {
     public static final String DEFAULT_SCOPE = "default";
 
     /** The default branch name when not specified. */
-    public static final String DEFAULT_BRANCH = "master";
+    public static final String DEFAULT_BRANCH = "main";
 
     /** Query parameter key for branch. */
     public static final String PARAM_BRANCH = "branch";
