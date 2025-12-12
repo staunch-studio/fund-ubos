@@ -28,6 +28,7 @@ import type {
   ApprovalRequestDetail,
   ApproveRequest, // Legacy alias
   ApproveRequestResponse, // Legacy alias
+  NavigateEntitiesParams,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -67,6 +68,32 @@ export const ubosApi = createApi({
               { type: 'Entity', id: 'LIST' },
             ]
           : [{ type: 'Entity', id: 'LIST' }],
+    }),
+
+    // GET /entities/navigate
+    // Returns entities organized by namespace for tree navigation
+    navigateEntities: builder.query<EntityInstance[], NavigateEntitiesParams>({
+      query: (params) => {
+        const searchParams = new URLSearchParams()
+        searchParams.append('branch', params.branch)
+        if (params.type) {
+          searchParams.append('type', params.type)
+        }
+        if (params.namespace) {
+          searchParams.append('namespace', params.namespace)
+        }
+        return {
+          url: 'entities/navigate',
+          params: searchParams,
+        }
+      },
+      providesTags: (result) =>
+        result
+          ? [
+              ...result.map(({ id }) => ({ type: 'Entity' as const, id })),
+              { type: 'Entity', id: 'NAVIGATE' },
+            ]
+          : [{ type: 'Entity', id: 'NAVIGATE' }],
     }),
 
     // GET /snapshot
@@ -427,6 +454,7 @@ export const ubosApi = createApi({
 
 export const {
   useGetEntitiesQuery,
+  useNavigateEntitiesQuery,
   useGetSnapshotQuery,
   useBatchCommitMutation,
   useGetHistoryQuery,

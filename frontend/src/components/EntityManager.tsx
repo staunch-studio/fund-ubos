@@ -1,11 +1,14 @@
 import { useState, useMemo } from 'react'
-import { Table, Button, Input, Space, Tag, message, theme, Typography, Badge } from 'antd'
+import { Table, Button, Input, Space, Tag, message, theme, Typography, Badge, Breadcrumb } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import SplitPane from 'react-split-pane'
 import { useGetEntitiesQuery, useBatchCommitMutation } from '../store/ubosApi'
 import type { EntityInstance } from '../types/ubos'
 import { SendOutlined, SearchOutlined } from '@ant-design/icons'
 import { buildUbosUri, parseUbosUri } from '../utils/useUbosUri'
 import { Copy, CheckCircle2 } from 'lucide-react'
+import { NamespaceTree } from './NamespaceTree'
+import { getEntitiesInNamespace, getBreadcrumbItems } from '../utils/namespaceTree'
 
 const { Text } = Typography
 const { Search } = Input
@@ -43,10 +46,11 @@ export function EntityManager({
   const [searchText, setSearchText] = useState('')
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [copiedUri, setCopiedUri] = useState<string | null>(null)
+  const [selectedNamespace, setSelectedNamespace] = useState<string | null>(null)
 
   // RTK Query hooks
   const {
-    data: entities = [],
+    data: allEntities = [],
     isLoading,
     error,
   } = useGetEntitiesQuery({
@@ -54,6 +58,15 @@ export function EntityManager({
     search: searchText || undefined,
     type: entityTypeFilter,
   })
+
+  // Filter entities by selected namespace
+  const entities = useMemo(() => {
+    if (!selectedNamespace) {
+      // Show root-level entities (those without dots)
+      return allEntities.filter((e) => !e.slug.includes('.'))
+    }
+    return getEntitiesInNamespace(allEntities, selectedNamespace)
+  }, [allEntities, selectedNamespace])
 
   const [batchCommit, { isLoading: isCommitting }] = useBatchCommitMutation()
 
@@ -290,20 +303,118 @@ export function EntityManager({
         </Space>
       </div>
 
-      {/* Table - Enhanced */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        {error && (
+      {/* Split Panel: Tree View + Entity List */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+        <SplitPane
+          split="vertical"
+          minSize={200}
+          maxSize={600}
+          defaultSize={300}
+          style={{ position: 'relative' }}
+        >
+          {/* Left Pane: Tree View */}
           <div
             style={{
-              padding: '24px',
-              textAlign: 'center',
-              color: '#F85149',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              background: colorBgContainer,
+              borderRight: `1px solid ${colorBorder}`,
             }}
           >
-            <Text type="danger">Error loading entities: {JSON.stringify(error)}</Text>
+            <div
+              style={{
+                padding: '12px 16px',
+                borderBottom: `1px solid ${colorBorder}`,
+                background: colorBgElevated,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: colorTextSecondary,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}
+              >
+                Namespace Tree
+              </Text>
+            </div>
+            <NamespaceTree
+              currentBranch={currentBranch}
+              entityTypeFilter={entityTypeFilter}
+              selectedNamespace={selectedNamespace || undefined}
+              onNamespaceSelect={(namespace) => {
+                setSelectedNamespace(namespace)
+                onRowSelect(null)
+                setSelectedRowKeys([])
+              }}
+              onEntitySelect={(entity) => {
+                onRowSelect(entity)
+                setSelectedRowKeys([entity.id])
+              }}
+            />
           </div>
-        )}
-        <Table
+
+          {/* Right Pane: Entity List */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
+            {/* Breadcrumb Navigation */}
+            {selectedNamespace && (
+              <div
+                style={{
+                  padding: '12px 16px',
+                  borderBottom: `1px solid ${colorBorder}`,
+                  background: colorBgElevated,
+                }}
+              >
+                <Breadcrumb
+                  items={[
+                    {
+                      title: (
+                        <span
+                          style={{ cursor: 'pointer', color: colorText }}
+                          onClick={() => setSelectedNamespace(null)}
+                        >
+                          Root
+                        </span>
+                      ),
+                    },
+                    ...getBreadcrumbItems(selectedNamespace).map((item, index) => {
+                      const items = getBreadcrumbItems(selectedNamespace)
+                      const path = items.slice(0, index + 1).join('.')
+                      return {
+                        title: (
+                          <span
+                            style={{ cursor: 'pointer', color: colorText }}
+                            onClick={() => setSelectedNamespace(path)}
+                          >
+                            {item}
+                          </span>
+                        ),
+                      }
+                    }),
+                  ]}
+                  separator=">"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+            )}
+
+            {/* Table - Enhanced */}
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              {error && (
+                <div
+                  style={{
+                    padding: '24px',
+                    textAlign: 'center',
+                    color: '#F85149',
+                  }}
+                >
+                  <Text type="danger">Error loading entities: {JSON.stringify(error)}</Text>
+                </div>
+              )}
+              <Table
           rowSelection={rowSelection}
           columns={columns}
           dataSource={entities}
@@ -346,9 +457,12 @@ export function EntityManager({
               }
             },
           })}
-          scroll={{ y: 'calc(100vh - 280px)' }}
-          size="middle"
-        />
+                scroll={{ y: 'calc(100vh - 280px)' }}
+                size="middle"
+              />
+            </div>
+          </div>
+        </SplitPane>
       </div>
     </div>
   )

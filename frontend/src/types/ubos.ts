@@ -31,6 +31,13 @@ export interface GetEntitiesParams {
   search?: string;
 }
 
+// Navigation API types
+export interface NavigateEntitiesParams {
+  branch: string;
+  type?: string;
+  namespace?: string; // Optional namespace path (e.g., "finance.taxes")
+}
+
 // Resource Context Request DTO - matches Java ResourceContextRequest
 // Used for operations that require slug, type, and branch context
 export interface ResourceContextRequest {

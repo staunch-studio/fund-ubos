@@ -59,6 +59,68 @@ public class LcmKernelService {
     }
 
     /**
+     * Find entities by slug prefix (namespace/directory navigation).
+     *
+     * <p>Slug is treated as a dot-separated virtual path, e.g. "finance.taxes.calc_rate".
+     * This method performs a prefix query so callers can list everything under a "directory".
+     *
+     * @param prefix     path prefix, e.g. "", "finance", "finance.taxes"
+     * @param entityType optional entity type filter (nullable/blank means all types)
+     * @return matching entity instances (not snapshots)
+     */
+    public Flux<LcmEntityInstance> findBySlugPrefix(String prefix, String entityType) {
+        String normalizedPrefix = normalizePathPrefix(prefix);
+        String likePrefix = normalizedPrefix.isBlank() ? "" : (normalizedPrefix + ".");
+
+        StringBuilder sql = new StringBuilder("""
+            SELECT i.*
+            FROM lcm_entity_instance i
+            WHERE i.slug LIKE :slugPrefix
+        """);
+
+        boolean filterByType = entityType != null && !entityType.isBlank();
+        if (filterByType) {
+            sql.append(" AND i.entity_type = :entityType");
+        }
+        sql.append(" ORDER BY i.slug");
+
+        DatabaseClient.GenericExecuteSpec spec = dbClient.sql(sql.toString())
+            .bind("slugPrefix", likePrefix + "%");
+
+        if (filterByType) {
+            spec = spec.bind("entityType", entityType.toUpperCase());
+        }
+
+        return spec
+            .map((row, meta) -> {
+                LcmEntityInstance e = new LcmEntityInstance();
+                e.setId(row.get("id", String.class));
+                e.setEntityType(row.get("entity_type", String.class));
+                e.setSlug(row.get("slug", String.class));
+                e.setCreatedAt(row.get("created_at", LocalDateTime.class));
+                return e;
+            })
+            .all()
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Normalize directory-like prefix.
+     * Examples:
+     * - null -> ""
+     * - "" -> ""
+     * - "finance." -> "finance"
+     * - ".finance.taxes." -> "finance.taxes"
+     */
+    private String normalizePathPrefix(String prefix) {
+        if (prefix == null) return "";
+        String p = prefix.trim();
+        while (p.startsWith(".")) p = p.substring(1);
+        while (p.endsWith(".")) p = p.substring(0, p.length() - 1);
+        return p;
+    }
+
+    /**
      * Get resource snapshot using a parsed UBOS URI.
      *
      * @param uriDetails the parsed URI details containing type, slug, branch, and optional commitId

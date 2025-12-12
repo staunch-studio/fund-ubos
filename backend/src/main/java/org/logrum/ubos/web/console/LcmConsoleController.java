@@ -48,6 +48,8 @@ import reactor.core.publisher.Mono;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 @Slf4j
 @RestController
@@ -1203,6 +1205,75 @@ public class LcmConsoleController
                 Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage())))
             .onErrorResume(IllegalStateException.class, e ->
                 Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage())));
+    }
+    /**
+     * Navigate entities by namespace (dot-separated slug prefix).
+     *
+     * <p>Example:
+     * GET /api/console/entities/navigate?pathPrefix=finance.taxes&type=LOGIC
+     *
+     * <p>Returns:
+     * - namespaces: immediate child "folders" under the prefix
+     * - entities: immediate child entities (leaf slugs) under the prefix
+     *
+     * Future-proofed with optional tenantId/groupId parameter for data isolation.
+     */
+    @GetMapping("/entities/navigate")
+    public Mono<Map<String, Object>> navigateEntities(
+        @RequestParam(defaultValue = "") String pathPrefix,
+        @RequestParam(required = false) String type,
+        @RequestParam(required = false) String tenantId,
+        @RequestParam(required = false) String groupId)
+    {
+        // TODO: When multi-tenancy is implemented, filter by tenantId/groupId
+
+        String normalizedPrefix = normalizePathPrefix(pathPrefix);
+        String prefixWithDot = normalizedPrefix.isBlank() ? "" : (normalizedPrefix + ".");
+
+        return kernelService.findBySlugPrefix(normalizedPrefix, type)
+            .collectList()
+            .map(allMatches -> {
+                Set<String> namespaces = new TreeSet<>();
+                List<LcmEntityInstance> entities = new java.util.ArrayList<>();
+
+                for (LcmEntityInstance e : allMatches) {
+                    String slug = e.getSlug();
+                    if (slug == null) continue;
+                    if (!prefixWithDot.isEmpty() && !slug.startsWith(prefixWithDot)) {
+                        continue;
+                    }
+
+                    String remainder = prefixWithDot.isEmpty() ? slug : slug.substring(prefixWithDot.length());
+                    if (remainder.isBlank()) {
+                        continue;
+                    }
+
+                    int nextDot = remainder.indexOf('.');
+                    if (nextDot >= 0) {
+                        namespaces.add(remainder.substring(0, nextDot));
+                    } else {
+                        entities.add(e);
+                    }
+                }
+
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("pathPrefix", normalizedPrefix);
+                resp.put("type", type);
+                resp.put("tenantId", tenantId);
+                resp.put("groupId", groupId);
+                resp.put("namespaces", namespaces);
+                resp.put("entities", entities);
+                resp.put("totalMatches", allMatches.size());
+                return resp;
+            });
+    }
+
+    private String normalizePathPrefix(String prefix) {
+        if (prefix == null) return "";
+        String p = prefix.trim();
+        while (p.startsWith(".")) p = p.substring(1);
+        while (p.endsWith(".")) p = p.substring(0, p.length() - 1);
+        return p;
     }
 
 }
