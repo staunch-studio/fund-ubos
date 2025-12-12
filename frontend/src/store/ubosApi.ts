@@ -29,6 +29,13 @@ import type {
   ApproveRequest, // Legacy alias
   ApproveRequestResponse, // Legacy alias
   NavigateEntitiesParams,
+  RenameEntityRequest,
+  RenameEntityResponse,
+  CopyEntityRequest,
+  CopyEntityResponse,
+  BranchStatusParams,
+  BranchStatusResponse,
+  EntityStatus,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -474,5 +481,8 @@ export const {
   useGetPendingApprovalsQuery,
   useGetApprovalDetailQuery,
   useCancelApprovalRequestMutation,
+  useRenameEntityMutation,
+  useCopyEntityMutation,
+  useGetBranchStatusQuery,
 } = ubosApi
 

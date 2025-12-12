@@ -38,6 +38,54 @@ export interface NavigateEntitiesParams {
   namespace?: string; // Optional namespace path (e.g., "finance.taxes")
 }
 
+// Entity rename/copy types
+export interface RenameEntityRequest {
+  slug: string; // Current slug
+  newSlug: string; // New slug
+  branch: string; // Branch name
+  type?: string; // Entity type (optional)
+}
+
+export interface RenameEntityResponse {
+  success: boolean;
+  message?: string;
+  newSlug?: string;
+}
+
+export interface CopyEntityRequest {
+  slug: string; // Source slug
+  targetSlug: string; // Target slug
+  sourceBranch: string; // Source branch
+  targetBranch: string; // Target branch
+  type?: string; // Entity type (optional)
+}
+
+export interface CopyEntityResponse {
+  success: boolean;
+  message?: string;
+  targetSlug?: string;
+}
+
+// Branch status/diff types
+export interface BranchStatusParams {
+  baseBranch: string; // Base branch (e.g., "master")
+  currentBranch: string; // Current branch to compare
+}
+
+export interface EntityStatus {
+  slug: string;
+  entityType: string;
+  status: 'NEW' | 'MODIFIED' | 'DELETED';
+  baseCommitId?: number; // Commit ID in base branch
+  currentCommitId?: number; // Commit ID in current branch
+}
+
+export interface BranchStatusResponse {
+  baseBranch: string;
+  currentBranch: string;
+  entities: EntityStatus[];
+}
+
 // Resource Context Request DTO - matches Java ResourceContextRequest
 // Used for operations that require slug, type, and branch context
 export interface ResourceContextRequest {

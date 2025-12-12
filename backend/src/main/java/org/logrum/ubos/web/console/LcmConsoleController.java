@@ -23,11 +23,13 @@ import org.logrum.ubos.web.console.dto.BatchCommitRequest;
 import org.logrum.ubos.web.console.dto.BranchCreateRequest;
 import org.logrum.ubos.web.console.dto.BranchInfo;
 import org.logrum.ubos.web.console.dto.CommitHistoryItem;
+import org.logrum.ubos.web.console.dto.CopyRequest;
 import org.logrum.ubos.web.console.dto.EnvironmentConfigDto;
 import org.logrum.ubos.web.console.dto.MergeRequest;
 import org.logrum.ubos.web.console.dto.MergeResult;
 import org.logrum.ubos.web.console.dto.ProcessDetailItem;
 import org.logrum.ubos.web.console.dto.ProcessLogItem;
+import org.logrum.ubos.web.console.dto.RenameRequest;
 import org.logrum.ubos.web.console.dto.ResourceContextRequest;
 import org.logrum.ubos.web.console.dto.RevertRequest;
 import org.logrum.ubos.web.console.dto.SchemaCommitRequest;
@@ -1274,6 +1276,101 @@ public class LcmConsoleController
         while (p.startsWith(".")) p = p.substring(1);
         while (p.endsWith(".")) p = p.substring(0, p.length() - 1);
         return p;
+    }
+    /**
+     * Rename (move) an entity by changing its slug (dot-separated path).
+     */
+    @PostMapping("/entity/rename")
+    public Mono<Map<String, Object>> renameEntity(@RequestBody RenameRequest request) {
+        if (request == null || request.uriString() == null || request.uriString().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "uriString is required"));
+        }
+        if (request.newSlug() == null || request.newSlug().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "newSlug is required"));
+        }
+
+        // AuthZ: treat rename as COMMIT against the *current* uri
+        return authzService.getCurrentUser()
+            .flatMap(userId -> authzService.isPermitted(userId, LcmAuthzService.ACTION_COMMIT, request.uriString()))
+            .flatMap(permitted -> {
+                if (!permitted) {
+                    return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Not permitted to rename entity"));
+                }
+                return kernelService.renameEntity(
+                    request.uriString(),
+                    request.newSlug(),
+                    request.resolvedAuthor(),
+                    request.resolvedMessage()
+                );
+            })
+            .map(commitId -> {
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("success", true);
+                resp.put("message", "Rename completed");
+                resp.put("commitId", commitId);
+                resp.put("uri", request.uriString());
+                resp.put("newSlug", request.newSlug());
+                return resp;
+            });
+    }
+
+    /**
+     * Copy an entity snapshot to a new slug and branch.
+     */
+    @PostMapping("/entity/copy")
+    public Mono<Map<String, Object>> copyEntity(@RequestBody CopyRequest request) {
+        if (request == null || request.sourceUriString() == null || request.sourceUriString().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "sourceUriString is required"));
+        }
+        if (request.targetSlug() == null || request.targetSlug().isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "targetSlug is required"));
+        }
+
+        // AuthZ: treat copy as COMMIT against the *target* uri
+        UbosUriUtil.UbosUriDetails src = UbosUriUtil.parse(request.sourceUriString());
+        String targetUri = UbosUriUtil.build(src.type(), request.targetSlug(), request.resolvedTargetBranch());
+
+        return authzService.getCurrentUser()
+            .flatMap(userId -> authzService.isPermitted(userId, LcmAuthzService.ACTION_COMMIT, targetUri))
+            .flatMap(permitted -> {
+                if (!permitted) {
+                    return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Not permitted to copy entity"));
+                }
+                return kernelService.copyEntity(
+                    request.sourceUriString(),
+                    request.targetSlug(),
+                    request.resolvedTargetBranch(),
+                    request.resolvedAuthor(),
+                    request.resolvedMessage()
+                );
+            })
+            .map(commitId -> {
+                Map<String, Object> resp = new LinkedHashMap<>();
+                resp.put("success", true);
+                resp.put("message", "Copy completed");
+                resp.put("commitId", commitId);
+                resp.put("sourceUri", request.sourceUriString());
+                resp.put("targetSlug", request.targetSlug());
+                resp.put("targetBranch", request.resolvedTargetBranch());
+                return resp;
+            });
+    }
+
+    /**
+     * Get branch difference (NEW/DELETED/MODIFIED) between two branches.
+     */
+    @GetMapping("/status/diff")
+    public Flux<Map<String, Object>> branchDiff(
+        @RequestParam String currentBranch,
+        @RequestParam String baseBranch
+    ) {
+        if (currentBranch == null || currentBranch.isBlank()) {
+            return Flux.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "currentBranch is required"));
+        }
+        if (baseBranch == null || baseBranch.isBlank()) {
+            return Flux.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "baseBranch is required"));
+        }
+        return kernelService.getBranchDifference(currentBranch, baseBranch);
     }
 
 }

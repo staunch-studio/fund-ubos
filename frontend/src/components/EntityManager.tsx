@@ -1,14 +1,16 @@
-import { useState, useMemo } from 'react'
-import { Table, Button, Input, Space, Tag, message, theme, Typography, Badge, Breadcrumb } from 'antd'
+import { useState, useMemo, useEffect } from 'react'
+import { Table, Button, Input, Space, Tag, message, theme, Typography, Badge, Breadcrumb, Dropdown } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
 import { useGetEntitiesQuery, useBatchCommitMutation } from '../store/ubosApi'
 import type { EntityInstance } from '../types/ubos'
 import { SendOutlined, SearchOutlined } from '@ant-design/icons'
 import { buildUbosUri, parseUbosUri } from '../utils/useUbosUri'
-import { Copy, CheckCircle2 } from 'lucide-react'
+import { Copy, CheckCircle2, MoreVertical, Edit, Copy as CopyIcon } from 'lucide-react'
 import { NamespaceTree } from './NamespaceTree'
 import { getEntitiesInNamespace, getBreadcrumbItems } from '../utils/namespaceTree'
+import { useEntityContextMenu } from './EntityContextMenu'
 
 const { Text } = Typography
 const { Search } = Input
@@ -47,6 +49,8 @@ export function EntityManager({
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [copiedUri, setCopiedUri] = useState<string | null>(null)
   const [selectedNamespace, setSelectedNamespace] = useState<string | null>(null)
+  const [contextMenuEntity, setContextMenuEntity] = useState<EntityInstance | null>(null)
+  const [contextMenuAction, setContextMenuAction] = useState<'rename' | 'copy' | null>(null)
 
   // RTK Query hooks
   const {
@@ -77,9 +81,65 @@ export function EntityManager({
         title: 'Slug',
         dataIndex: 'slug',
         key: 'slug',
-        render: (text: string) => (
-          <Text style={{ fontWeight: 500, color: colorText }}>{text}</Text>
-        ),
+        render: (text: string, record: EntityInstance) => {
+          const menuItems: MenuProps['items'] = [
+            {
+              key: 'rename',
+              label: (
+                <Space>
+                  <Edit size={14} />
+                  <span>Rename</span>
+                </Space>
+              ),
+              onClick: () => {
+                setContextMenuEntity(record)
+                setContextMenuAction('rename')
+              },
+            },
+            {
+              key: 'copy',
+              label: (
+                <Space>
+                  <CopyIcon size={14} />
+                  <span>Copy</span>
+                </Space>
+              ),
+              onClick: () => {
+                setContextMenuEntity(record)
+                setContextMenuAction('copy')
+              },
+            },
+          ]
+
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Text style={{ fontWeight: 500, color: colorText }}>{text}</Text>
+              <Dropdown
+                menu={{ items: menuItems }}
+                trigger={['contextMenu']}
+              >
+                <span
+                  style={{
+                    cursor: 'pointer',
+                    padding: '4px',
+                    borderRadius: '4px',
+                    opacity: 0.6,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.opacity = '1'
+                    e.currentTarget.style.background = 'rgba(74, 158, 255, 0.1)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.opacity = '0.6'
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <MoreVertical size={14} />
+                </span>
+              </Dropdown>
+            </div>
+          )
+        },
       },
       {
         title: 'Type',
@@ -253,6 +313,35 @@ export function EntityManager({
     setSearchText(value)
   }
 
+  // Context menu for the currently selected entity
+  const entityContextMenu = contextMenuEntity
+    ? useEntityContextMenu({
+        entity: contextMenuEntity,
+        currentBranch,
+        onRenameSuccess: () => {
+          // Entities will auto-refresh via RTK Query cache invalidation
+          setContextMenuEntity(null)
+          setContextMenuAction(null)
+        },
+        onCopySuccess: () => {
+          // Entities will auto-refresh via RTK Query cache invalidation
+          setContextMenuEntity(null)
+          setContextMenuAction(null)
+        },
+      })
+    : null
+
+  // Show appropriate modal based on action
+  useEffect(() => {
+    if (entityContextMenu && contextMenuAction === 'rename') {
+      entityContextMenu.showRenameModal()
+      setContextMenuAction(null)
+    } else if (entityContextMenu && contextMenuAction === 'copy') {
+      entityContextMenu.showCopyModal()
+      setContextMenuAction(null)
+    }
+  }, [contextMenuAction, entityContextMenu])
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: colorBgContainer }}>
       {/* Toolbar - Enhanced */}
@@ -353,6 +442,9 @@ export function EntityManager({
               onEntitySelect={(entity) => {
                 onRowSelect(entity)
                 setSelectedRowKeys([entity.id])
+              }}
+              onNamespaceRename={() => {
+                // Entities will auto-refresh via RTK Query cache invalidation
               }}
             />
           </div>
@@ -464,6 +556,14 @@ export function EntityManager({
           </div>
         </SplitPane>
       </div>
+
+      {/* Context Menu Modals */}
+      {entityContextMenu && (
+        <>
+          {entityContextMenu.RenameModal}
+          {entityContextMenu.CopyModal}
+        </>
+      )}
     </div>
   )
 }

@@ -806,5 +806,187 @@ public class LcmKernelService {
             );
     }
 
+    /**
+     * Rename (move) an entity by updating its slug, and record the rename as a new version chain commit.
+     *
+     * <p>Crucial behavior:
+     * <ol>
+     *   <li>Atomically update lcm_entity_instance.slug for the existing entity_id</li>
+     *   <li>Create a new lcm_entity_version_chain record on the same branch documenting the action</li>
+     *   <li>Move the branch HEAD to that rename commit</li>
+     * </ol>
+     */
+    @Transactional
+    public Mono<Long> renameEntity(String uriString, String newSlug, String author, String message) {
+        if (uriString == null || uriString.isBlank()) {
+            return Mono.error(new IllegalArgumentException("uriString is required"));
+        }
+        if (newSlug == null || newSlug.isBlank()) {
+            return Mono.error(new IllegalArgumentException("newSlug is required"));
+        }
 
+        UbosUriUtil.UbosUriDetails details = UbosUriUtil.parse(uriString);
+        String type = details.type().toUpperCase();
+        String branch = details.branch();
+        String oldSlug = details.slug();
+
+        String normalizedNewSlug = newSlug.trim();
+
+        return entityRepo.findByEntityTypeAndSlug(type, oldSlug)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException(
+                String.format("Entity not found: %s/%s", type, oldSlug))))
+            .flatMap(entity -> {
+                // Ensure slug uniqueness within the same entity type
+                Mono<Void> uniquenessCheck = entityRepo.findByEntityTypeAndSlug(type, normalizedNewSlug)
+                    .flatMap(existing -> Mono.<Void>error(new IllegalArgumentException(
+                        String.format("Target slug already exists: %s/%s", type, normalizedNewSlug))))
+                    .switchIfEmpty(Mono.<Void>empty());
+
+                Mono<Long> headMono = versionRepo.findHeadSnapshot(entity.getId(), branch)
+                    .map(LcmEntityVersionChain::getCommitId)
+                    .defaultIfEmpty(0L);
+
+                Mono<Void> updateSlugMono = dbClient.sql("""
+                        UPDATE lcm_entity_instance
+                        SET slug = :newSlug
+                        WHERE id = :entityId
+                    """)
+                    .bind("newSlug", normalizedNewSlug)
+                    .bind("entityId", entity.getId())
+                    .fetch()
+                    .rowsUpdated()
+                    .flatMap(rows -> {
+                        if (rows == 0) {
+                            return Mono.error(new IllegalStateException("Rename failed: no rows updated"));
+                        }
+                        return Mono.empty();
+                    });
+
+                return uniquenessCheck
+                    .then(headMono)
+                    .flatMap(parentCommitId -> {
+                        Map<String, Object> payload = new LinkedHashMap<>();
+                        payload.put("action", "RENAME");
+                        payload.put("oldSlug", oldSlug);
+                        payload.put("newSlug", normalizedNewSlug);
+
+                        String json;
+                        try {
+                            json = objectMapper.writeValueAsString(payload);
+                        } catch (JsonProcessingException e) {
+                            return Mono.error(new IllegalArgumentException("Failed to serialize rename payload: " + e.getMessage()));
+                        }
+
+                        Long actualParent = (parentCommitId == 0L) ? null : parentCommitId;
+
+                        LcmEntityVersionChain renameCommit = LcmEntityVersionChain.builder()
+                            .entityId(entity.getId())
+                            .branchName(branch)
+                            .parentCommitId(actualParent)
+                            .snapshotData(json)
+                            .authorId((author == null || author.isBlank()) ? "system" : author)
+                            .message((message == null || message.isBlank())
+                                ? String.format("Rename %s -> %s", oldSlug, normalizedNewSlug)
+                                : message)
+                            .committedAt(LocalDateTime.now())
+                            .build();
+
+                        return updateSlugMono
+                            .then(versionRepo.save(renameCommit).retryWhen(retryPolicy))
+                            .flatMap(saved -> updateBranchHead(entity.getId(), branch, saved.getCommitId())
+                                .thenReturn(saved.getCommitId()));
+                    });
+            })
+            .retryWhen(retryPolicy);
+    }
+
+    /**
+     * Copy an entity snapshot from a source URI into a new slug and branch.
+     *
+     * <p>Steps:
+     * <ol>
+     *   <li>Fetch snapshot_data from source URI (supports branch inheritance / commitId)</li>
+     *   <li>Commit that JSON into (type, targetSlug, targetBranch)</li>
+     * </ol>
+     */
+    public Mono<Long> copyEntity(String sourceUriString, String targetSlug, String targetBranch, String author, String message) {
+        if (sourceUriString == null || sourceUriString.isBlank()) {
+            return Mono.error(new IllegalArgumentException("sourceUriString is required"));
+        }
+        if (targetSlug == null || targetSlug.isBlank()) {
+            return Mono.error(new IllegalArgumentException("targetSlug is required"));
+        }
+        String resolvedTargetBranch = (targetBranch == null || targetBranch.isBlank()) ? "master" : targetBranch;
+
+        UbosUriUtil.UbosUriDetails details = UbosUriUtil.parse(sourceUriString);
+        String type = details.type().toUpperCase();
+
+        return getResourceSnapshot(details)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Source snapshot not found: " + sourceUriString)))
+            .flatMap(snapshotJson ->
+                commit(
+                    type,
+                    targetSlug.trim(),
+                    resolvedTargetBranch,
+                    snapshotJson,
+                    (author == null || author.isBlank()) ? "system" : author,
+                    (message == null || message.isBlank())
+                        ? String.format("Copy from %s to %s@%s", details.slug(), targetSlug.trim(), resolvedTargetBranch)
+                        : message
+                )
+            );
+    }
+
+    /**
+     * Compare two branches and return NEW/DELETED/MODIFIED entities by HEAD commit id difference.
+     *
+     * @return Flux of maps with keys: slug, entityType, status
+     */
+    public Flux<Map<String, Object>> getBranchDifference(String currentBranch, String baseBranch) {
+        String cur = (currentBranch == null || currentBranch.isBlank()) ? "master" : currentBranch;
+        String base = (baseBranch == null || baseBranch.isBlank()) ? "master" : baseBranch;
+
+        String sql = """
+            WITH cur AS (
+                SELECT entity_id, head_commit_id
+                FROM lcm_entity_branch_head
+                WHERE branch_name = :currentBranch
+            ),
+            base AS (
+                SELECT entity_id, head_commit_id
+                FROM lcm_entity_branch_head
+                WHERE branch_name = :baseBranch
+            )
+            SELECT
+                i.slug AS slug,
+                i.entity_type AS entity_type,
+                CASE
+                    WHEN base.entity_id IS NULL THEN 'NEW'
+                    WHEN cur.entity_id IS NULL THEN 'DELETED'
+                    WHEN cur.head_commit_id <> base.head_commit_id THEN 'MODIFIED'
+                    ELSE 'UNCHANGED'
+                END AS status
+            FROM cur
+            FULL OUTER JOIN base ON cur.entity_id = base.entity_id
+            JOIN lcm_entity_instance i ON i.id = COALESCE(cur.entity_id, base.entity_id)
+            WHERE
+                base.entity_id IS NULL
+                OR cur.entity_id IS NULL
+                OR cur.head_commit_id <> base.head_commit_id
+            ORDER BY i.slug
+        """;
+
+        return dbClient.sql(sql)
+            .bind("currentBranch", cur)
+            .bind("baseBranch", base)
+            .map((row, meta) -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("slug", row.get("slug", String.class));
+                m.put("entityType", row.get("entity_type", String.class));
+                m.put("status", row.get("status", String.class));
+                return m;
+            })
+            .all()
+            .retryWhen(retryPolicy);
+    }
 }

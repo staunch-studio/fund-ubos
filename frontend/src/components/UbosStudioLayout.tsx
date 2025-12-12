@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User, GitCompare } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -15,6 +15,7 @@ import { EnvironmentManager } from './EnvironmentManager'
 import { SchemaManager } from './SchemaManager'
 import { ApprovalManager } from './ApprovalManager'
 import { IdentityManager } from './IdentityManager'
+import { BranchStatusViewer } from './BranchStatusViewer'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
 import { message } from 'antd'
@@ -66,7 +67,7 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus'>('entities')
   
   const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
@@ -325,6 +326,18 @@ export function UbosStudioLayout({
           </span>
         ),
       },
+      {
+        type: 'divider' as const,
+      },
+      {
+        key: 'branchStatus',
+        icon: <GitCompare size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'branchStatus' ? 500 : 400 }}>
+            Branch Status
+          </span>
+        ),
+      },
     ],
     [entityTypes, selectedEntityType, activeView]
   )
@@ -470,7 +483,7 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' || activeView === 'branchStatus' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
@@ -517,6 +530,14 @@ export function UbosStudioLayout({
             <ApprovalManager currentBranch={currentBranch} />
           ) : activeView === 'identity' ? (
             <IdentityManager currentBranch={currentBranch} />
+          ) : activeView === 'branchStatus' ? (
+            <BranchStatusViewer
+              currentBranch={currentBranch}
+              onEntitySelect={(uri) => {
+                setActiveResourceUri(uri)
+                setActiveView('entities')
+              }}
+            />
           ) : (
           <SplitPane
             split="vertical"
