@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Editor from '@monaco-editor/react'
 import { Tabs, theme, Typography } from 'antd'
 import type { TabsProps } from 'antd'
-import { useGetSnapshotQuery } from '../store/ubosApi'
+import { useGetSnapshotQuery, useGetHistoryQuery, useGetSnapshotByCommitQuery } from '../store/ubosApi'
 import { FileCode, History, Loader2 } from 'lucide-react'
 import { HistoryViewer } from './HistoryViewer'
+import { TimeTravelSlider } from './TimeTravelSlider'
 import { parseUbosUri } from '../utils/useUbosUri'
+import type { ResourceContextRequest } from '../types/ubos'
 
 const { Text } = Typography
 
@@ -26,35 +28,114 @@ export function SnapshotEditor({
 
   const [editorValue, setEditorValue] = useState('')
   const [activeTab, setActiveTab] = useState('current')
+  const [timeTravelCommitId, setTimeTravelCommitId] = useState<number | null>(null)
+  const [isTimeTravelMode, setIsTimeTravelMode] = useState(false)
 
   // Parse URI to extract context for HistoryViewer
   const uriDetails = activeUri ? parseUbosUri(activeUri) : null
 
-  // Fetch snapshot using URI string
+  // Fetch history for time travel
+  const {
+    data: history = [],
+    isLoading: isLoadingHistory,
+  } = useGetHistoryQuery(
+    {
+      slug: uriDetails?.slug || '',
+      type: uriDetails?.type || '',
+      branch: uriDetails?.branch || '',
+    } as ResourceContextRequest,
+    {
+      skip: !uriDetails?.slug || !uriDetails?.type,
+    }
+  )
+
+  // Fetch snapshot by commit for time travel
+  const {
+    data: timeTravelSnapshot,
+    isLoading: isLoadingTimeTravelSnapshot,
+  } = useGetSnapshotByCommitQuery(
+    {
+      slug: uriDetails?.slug || '',
+      type: uriDetails?.type || '',
+      branch: uriDetails?.branch || '',
+      commitId: timeTravelCommitId || 0,
+    },
+    {
+      skip: !timeTravelCommitId || !uriDetails?.slug || !uriDetails?.type,
+    }
+  )
+
+  // Determine which snapshot to use
+  const snapshotToUse = isTimeTravelMode && timeTravelSnapshot ? timeTravelSnapshot : null
+
+  // Fetch current snapshot using URI string
   const {
     data: snapshot,
     isLoading,
     error,
   } = useGetSnapshotQuery(activeUri || '', {
-    skip: !activeUri,
+    skip: !activeUri || (isTimeTravelMode && timeTravelSnapshot !== undefined),
   })
 
   // Update editor value when snapshot data changes
   useEffect(() => {
-    if (snapshot?.snapshotData) {
+    const dataToUse = snapshotToUse || snapshot
+    if (dataToUse?.snapshotData) {
       // snapshotData is a RAW JSON string - format it for display
       try {
-        const parsed = JSON.parse(snapshot.snapshotData)
+        const parsed = JSON.parse(dataToUse.snapshotData)
         setEditorValue(JSON.stringify(parsed, null, 2))
       } catch {
         // If not valid JSON, use raw data
-        setEditorValue(snapshot.snapshotData)
+        setEditorValue(dataToUse.snapshotData)
       }
-    } else if (activeUri && !snapshot) {
+    } else if (activeUri && !dataToUse) {
       // URI selected but no snapshot yet
       setEditorValue('')
     }
-  }, [snapshot, activeUri])
+  }, [snapshot, snapshotToUse, activeUri])
+
+  // Handle time travel commit change
+  const handleTimeTravelCommitChange = (commitId: number | null) => {
+    setTimeTravelCommitId(commitId)
+    setIsTimeTravelMode(commitId !== null)
+  }
+
+  // Generate blame data from history (simplified - in real app, this would come from API)
+  const blameData = useMemo(() => {
+    if (!isTimeTravelMode || !timeTravelSnapshot?.snapshotData) return {}
+    
+    try {
+      const currentData = JSON.parse(timeTravelSnapshot.snapshotData)
+      const blame: Record<string, { author: string; timestamp: string; commitId: number }> = {}
+      
+      // For each field in current data, find the last commit that modified it
+      // This is a simplified version - in production, you'd need field-level diff tracking
+      const findFieldBlame = (obj: any, path: string = '') => {
+        for (const [key, value] of Object.entries(obj)) {
+          const fieldPath = path ? `${path}.${key}` : key
+          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            findFieldBlame(value, fieldPath)
+          } else {
+            // Find the most recent commit that might have changed this field
+            const relevantCommit = history.find((h) => h.commitId <= (timeTravelCommitId || 0))
+            if (relevantCommit) {
+              blame[fieldPath] = {
+                author: relevantCommit.authorId,
+                timestamp: relevantCommit.createdAt,
+                commitId: relevantCommit.commitId,
+              }
+            }
+          }
+        }
+      }
+      
+      findFieldBlame(currentData)
+      return blame
+    } catch {
+      return {}
+    }
+  }, [isTimeTravelMode, timeTravelSnapshot, history, timeTravelCommitId])
 
   const handleEditorChange = (value: string | undefined) => {
     const newValue = value || ''
@@ -101,7 +182,7 @@ export function SnapshotEditor({
       ),
       children: (
         <div style={{ height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column', minHeight: 400 }}>
-          {isLoading ? (
+          {(isLoading || (isTimeTravelMode && isLoadingTimeTravelSnapshot)) ? (
             <div
               style={{
                 display: 'flex',
@@ -161,9 +242,22 @@ export function SnapshotEditor({
                   formatOnType: true,
                   automaticLayout: true,
                   scrollBeyondLastLine: false,
-                  readOnly: false,
+                  readOnly: isTimeTravelMode, // Read-only in time travel mode
                 }}
               />
+              {/* Time Travel Slider */}
+              {uriDetails && history.length > 0 && (
+                <TimeTravelSlider
+                  history={history}
+                  currentCommitId={timeTravelCommitId}
+                  onCommitChange={handleTimeTravelCommitChange}
+                  snapshotData={editorValue}
+                  blameData={blameData}
+                  slug={uriDetails.slug}
+                  entityType={uriDetails.type}
+                  branch={uriDetails.branch}
+                />
+              )}
             </div>
           )}
         </div>

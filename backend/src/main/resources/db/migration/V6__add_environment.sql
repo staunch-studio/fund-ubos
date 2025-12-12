@@ -21,3 +21,8 @@ INSERT INTO sys_environment_config (env_name, mapped_branch, description) VALUES
 
 -- Create index for quick lookups
 CREATE INDEX idx_env_config_branch ON sys_environment_config(mapped_branch);
+
+
+
+CREATE INDEX IF NOT EXISTS idx_version_chain_entity_commit
+ON lcm_entity_version_chain(entity_id, commit_id);
