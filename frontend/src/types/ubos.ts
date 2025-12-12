@@ -386,3 +386,36 @@ export interface CacheMetricsResponse {
   cacheSize?: number; // Total cache size in bytes (if available)
   evictionCount?: number; // Number of cache evictions (last 24h)
 }
+
+// Merge Conflict Resolution types
+export interface ConflictField {
+  path: string; // JSON path to the conflicting field (e.g., "/snapshotData/content")
+  base: any; // Base value (common ancestor)
+  ours: any; // Current branch value
+  theirs: any; // Incoming branch value
+}
+
+export interface MergeConflictObject {
+  slug: string; // Entity slug
+  type: string; // Entity type
+  branch: string; // Target branch
+  conflicts: ConflictField[]; // Array of conflicting fields
+  baseSnapshot?: string; // Base snapshot data (JSON string)
+  oursSnapshot?: string; // Our snapshot data (JSON string)
+  theirsSnapshot?: string; // Theirs snapshot data (JSON string)
+}
+
+export interface ResolveConflictRequest {
+  slug: string;
+  type: string;
+  branch: string;
+  resolvedData: Record<string, any>; // Final resolved JSON object
+  message?: string; // Optional commit message
+  author?: string; // Optional author
+}
+
+export interface ResolveConflictResponse {
+  success: boolean;
+  commitId?: number;
+  message?: string;
+}

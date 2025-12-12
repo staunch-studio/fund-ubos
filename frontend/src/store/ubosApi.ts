@@ -42,6 +42,8 @@ import type {
   WorkflowMetricsResponse,
   CommitsMetricsResponse,
   CacheMetricsResponse,
+  ResolveConflictRequest,
+  ResolveConflictResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -579,6 +581,33 @@ export const ubosApi = createApi({
         url: 'metrics/cache',
       }),
     }),
+
+    // POST /merge/resolve-conflict
+    resolveConflict: builder.mutation<ResolveConflictResponse, ResolveConflictRequest>({
+      query: (body) => ({
+        url: 'merge/resolve-conflict',
+        method: 'POST',
+        body: {
+          slug: body.slug,
+          type: body.type,
+          branch: body.branch,
+          resolvedData: body.resolvedData,
+          message: body.message || 'Resolved merge conflict',
+          author: body.author || 'system',
+        },
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        // Invalidate entity list and snapshots after conflict resolution
+        return [
+          { type: 'Entity', id: 'LIST' },
+          { type: 'Snapshot', id: 'LIST' },
+          { type: 'Branch', id: 'LIST' },
+        ]
+      },
+    }),
   }),
 })
 
@@ -613,5 +642,6 @@ export const {
   useGetWorkflowMetricsQuery,
   useGetCommitsMetricsQuery,
   useGetCacheMetricsQuery,
+  useResolveConflictMutation,
 } = ubosApi
 
