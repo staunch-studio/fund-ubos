@@ -34,6 +34,8 @@ import org.logrum.ubos.web.console.dto.ResourceContextRequest;
 import org.logrum.ubos.web.console.dto.RevertRequest;
 import org.logrum.ubos.web.console.dto.SchemaCommitRequest;
 import org.logrum.ubos.web.console.dto.SearchResult;
+import org.logrum.ubos.kernel.service.LcmMetricsService;
+import org.logrum.ubos.web.console.dto.SystemHealthDto;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -69,6 +71,7 @@ public class LcmConsoleController
     private final JsonSchemaValidator schemaValidator;
     private final ObjectMapper objectMapper;
     private final LcmAuthzService authzService;
+    private final LcmMetricsService metricsService;
 
     /**
      * 1. 获取实体列表 前端 RTK Query: useGetEntitiesQuery

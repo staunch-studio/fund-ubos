@@ -38,6 +38,10 @@ import type {
   EntityStatus,
   CacheStatsResponse,
   EvictCacheResponse,
+  HealthMetricsResponse,
+  WorkflowMetricsResponse,
+  CommitsMetricsResponse,
+  CacheMetricsResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -546,6 +550,35 @@ export const ubosApi = createApi({
         { type: 'Entity', id: `STATUS-${arg.baseBranch}-${arg.currentBranch}` },
       ],
     }),
+
+    // GET /metrics/health
+    getHealthMetrics: builder.query<HealthMetricsResponse, void>({
+      query: () => ({
+        url: 'metrics/health',
+      }),
+      // Polling will be handled at component level
+    }),
+
+    // GET /metrics/workflow
+    getWorkflowMetrics: builder.query<WorkflowMetricsResponse, void>({
+      query: () => ({
+        url: 'metrics/workflow',
+      }),
+    }),
+
+    // GET /metrics/commits
+    getCommitsMetrics: builder.query<CommitsMetricsResponse, void>({
+      query: () => ({
+        url: 'metrics/commits',
+      }),
+    }),
+
+    // GET /metrics/cache
+    getCacheMetrics: builder.query<CacheMetricsResponse, void>({
+      query: () => ({
+        url: 'metrics/cache',
+      }),
+    }),
   }),
 })
 
@@ -576,5 +609,9 @@ export const {
   useGetBranchStatusQuery,
   useGetCacheStatsQuery,
   useEvictAllCacheMutation,
+  useGetHealthMetricsQuery,
+  useGetWorkflowMetricsQuery,
+  useGetCommitsMetricsQuery,
+  useGetCacheMetricsQuery,
 } = ubosApi
 

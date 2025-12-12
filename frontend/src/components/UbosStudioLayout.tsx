@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User, GitCompare, Building2, HardDrive } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User, GitCompare, Building2, HardDrive, Activity } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -17,6 +17,7 @@ import { ApprovalManager } from './ApprovalManager'
 import { IdentityManager } from './IdentityManager'
 import { BranchStatusViewer } from './BranchStatusViewer'
 import { CacheManager } from './CacheManager'
+import { OperationalDashboard } from './OperationalDashboard'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
 import { useAppSelector, useAppDispatch } from '../store/hooks'
@@ -70,7 +71,7 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus' | 'cache'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus' | 'cache' | 'dashboard'>('entities')
   
   // Tenant/Group selector state from Redux
   const tenantId = useAppSelector((state) => state.tenant.tenantId)
@@ -130,6 +131,9 @@ export function UbosStudioLayout({
       setSelectedEntityType(undefined)
     } else if (e.key === 'cache') {
       setActiveView('cache')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'dashboard') {
+      setActiveView('dashboard')
       setSelectedEntityType(undefined)
     } else if (e.key === 'all') {
       setActiveView('entities')
@@ -361,6 +365,15 @@ export function UbosStudioLayout({
         type: 'divider' as const,
       },
       {
+        key: 'dashboard',
+        icon: <Activity size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'dashboard' ? 500 : 400 }}>
+            Dashboard
+          </span>
+        ),
+      },
+      {
         key: 'cache',
         icon: <HardDrive size={18} />,
         label: (
@@ -535,7 +548,7 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' || activeView === 'branchStatus' || activeView === 'cache' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' || activeView === 'branchStatus' || activeView === 'cache' || activeView === 'dashboard' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
@@ -555,6 +568,8 @@ export function UbosStudioLayout({
                 ? ['branchStatus']
                 : activeView === 'cache'
                 ? ['cache']
+                : activeView === 'dashboard'
+                ? ['dashboard']
                 : selectedEntityType
                 ? [selectedEntityType]
                 : ['all']
@@ -598,6 +613,8 @@ export function UbosStudioLayout({
             />
           ) : activeView === 'cache' ? (
             <CacheManager currentBranch={currentBranch} />
+          ) : activeView === 'dashboard' ? (
+            <OperationalDashboard currentBranch={currentBranch} />
           ) : (
           <SplitPane
             split="vertical"

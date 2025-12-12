@@ -34,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -55,6 +56,9 @@ public class LcmKernelService
 
     // Simple runtime cache: key = tenantId + "::" + uriString
     private final Map<String, String> snapshotCache = new ConcurrentHashMap<>();
+
+    private final AtomicLong snapshotCacheHits = new AtomicLong(0);
+    private final AtomicLong snapshotCacheMisses = new AtomicLong(0);
 
     /**
      * Initialize dependent services after construction.
@@ -87,10 +91,11 @@ public class LcmKernelService
         String cacheKey = tenantId + "::" + normalizedUri;
 
         String cached = snapshotCache.get(cacheKey);
-        if (cached != null)
-        {
+        if (cached != null) {
+            snapshotCacheHits.incrementAndGet();
             return Mono.just(cached);
         }
+        snapshotCacheMisses.incrementAndGet();
 
         UbosUriUtil.UbosUriDetails details = UbosUriUtil.parse(normalizedUri);
         if (details.hasCommitId())
@@ -1157,5 +1162,17 @@ public class LcmKernelService
             .bind("cid", newCommitId)
             .then()
             .retryWhen(retryPolicy);
+    }
+
+    public long getSnapshotCacheHits() {
+        return snapshotCacheHits.get();
+    }
+
+    public long getSnapshotCacheMisses() {
+        return snapshotCacheMisses.get();
+    }
+
+    public int getSnapshotCacheSize() {
+        return snapshotCache.size();
     }
 }

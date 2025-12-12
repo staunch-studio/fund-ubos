@@ -187,6 +187,16 @@ public class WebhookService {
     }
 
     /**
+     * Operational metrics hook: number of pending webhook dispatches.
+     *
+     * <p>Default implementation returns 0 until a real queue/table is implemented.
+     * Replace with an actual query when you introduce a dispatch queue.
+     */
+    public Mono<Long> getPendingDispatchCount() {
+        return Mono.just(0L);
+    }
+
+    /**
      * Find all active webhooks matching the trigger event and entity type.
      */
     private Flux<WebhookEntityPayload> findMatchingWebhooks(String triggerEvent, String entityType) {

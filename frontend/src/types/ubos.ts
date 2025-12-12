@@ -353,3 +353,36 @@ export interface EvictCacheResponse {
   message: string;
   evictedCount?: number; // Number of items evicted (if available)
 }
+
+// Metrics types for Operational Dashboard
+export interface HealthMetricsResponse {
+  status: 'GREEN' | 'YELLOW' | 'RED'; // System health status
+  totalEntities?: number; // Total number of entities
+  lastSuccessfulCommitTime?: string; // ISO timestamp of last successful commit
+  databaseStatus?: 'UP' | 'DOWN'; // Database connection status
+  message?: string; // Optional status message
+}
+
+export interface WorkflowMetricsResponse {
+  pendingApprovals: number; // Critical: Number of pending approval requests
+  pendingWebhooks: number; // Number of pending webhook deliveries
+  activeWorkflows?: number; // Number of currently active workflows
+  failedWorkflows?: number; // Number of failed workflows (last 24h)
+}
+
+export interface CommitsMetricsResponse {
+  totalCommits?: number; // Total commits (last 24h)
+  commitsByEntityType?: Record<string, number>; // Commits grouped by entity type
+  commitsOverTime?: Array<{
+    time: string; // ISO timestamp or hour label
+    count: number; // Number of commits in this time period
+  }>; // Commits over time (last 24h, hourly buckets)
+  averageCommitTime?: number; // Average commit processing time in ms
+}
+
+export interface CacheMetricsResponse {
+  hitRatio: number; // Cache hit ratio as a percentage (0-100)
+  totalCachedItems: number; // Total number of cached items
+  cacheSize?: number; // Total cache size in bytes (if available)
+  evictionCount?: number; // Number of cache evictions (last 24h)
+}
