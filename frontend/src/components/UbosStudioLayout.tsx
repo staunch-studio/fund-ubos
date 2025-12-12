@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -14,6 +14,7 @@ import { ProcessLogViewer } from './ProcessLogViewer'
 import { EnvironmentManager } from './EnvironmentManager'
 import { SchemaManager } from './SchemaManager'
 import { ApprovalManager } from './ApprovalManager'
+import { IdentityManager } from './IdentityManager'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
 import { message } from 'antd'
@@ -65,7 +66,7 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity'>('entities')
   
   const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
@@ -221,7 +222,12 @@ export function UbosStudioLayout({
         })
       }
     } catch (err: any) {
-      message.error(err?.data?.message || 'Failed to commit changes')
+      const errorMessage = err?.data?.message || err?.message || 'Failed to commit changes'
+      if (err?.status === 403 || err?.data?.status === 403) {
+        message.error(`Permission Denied: ${errorMessage}`)
+      } else {
+        message.error(errorMessage)
+      }
     }
   }
 
@@ -304,6 +310,18 @@ export function UbosStudioLayout({
         label: (
           <span style={{ fontWeight: activeView === 'approvals' ? 500 : 400 }}>
             Approvals
+          </span>
+        ),
+      },
+      {
+        type: 'divider' as const,
+      },
+      {
+        key: 'identity',
+        icon: <Shield size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'identity' ? 500 : 400 }}>
+            Identity
           </span>
         ),
       },
@@ -452,7 +470,7 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
@@ -497,6 +515,8 @@ export function UbosStudioLayout({
             <SchemaManager availableEntityTypes={entityTypes} currentBranch={currentBranch} />
           ) : activeView === 'approvals' ? (
             <ApprovalManager currentBranch={currentBranch} />
+          ) : activeView === 'identity' ? (
+            <IdentityManager currentBranch={currentBranch} />
           ) : (
           <SplitPane
             split="vertical"

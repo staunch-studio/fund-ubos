@@ -234,3 +234,168 @@ export function entityToApprovalRequest(entity: EntityInstance): Partial<Approva
   }
 }
 
+// User entity structure (entityType='USER')
+export interface UserData {
+  userId: string // The slug of the USER entity
+  username: string // User's login name
+  email?: string // User's email address
+  displayName?: string // User's display name
+  groups?: string[] // Array of group slugs the user belongs to
+  isActive: boolean // Whether the user account is active
+  createdAt?: string // ISO timestamp
+  lastLoginAt?: string // ISO timestamp
+}
+
+// Group entity structure (entityType='GROUP')
+export interface GroupData {
+  groupId: string // The slug of the GROUP entity
+  groupName: string // Group's display name
+  description?: string // Group description
+  roles?: string[] // Array of role/policy slugs assigned to this group
+  isActive: boolean // Whether the group is active
+  createdAt?: string // ISO timestamp
+}
+
+// Policy entity structure (entityType='POLICY')
+export interface PolicyData {
+  policyId: string // The slug of the POLICY entity
+  policyName: string // Policy's display name
+  description?: string // Policy description
+  rules: Record<string, any> // JSON object containing policy rules
+  isActive: boolean // Whether the policy is active
+  createdAt?: string // ISO timestamp
+}
+
+/**
+ * Parse UserData from EntitySnapshot
+ */
+export function parseUserFromSnapshot(snapshot: EntitySnapshot): UserData | null {
+  try {
+    const data = JSON.parse(snapshot.snapshotData)
+    return {
+      userId: data.userId || snapshot.entityId,
+      username: data.username || data.userId || snapshot.entityId,
+      email: data.email,
+      displayName: data.displayName,
+      groups: data.groups || [],
+      isActive: data.isActive !== false, // Default to true
+      createdAt: data.createdAt || snapshot.createdAt,
+      lastLoginAt: data.lastLoginAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Format UserData to JSON string for snapshotData
+ */
+export function formatUserToSnapshotData(userData: UserData): string {
+  return JSON.stringify({
+    userId: userData.userId,
+    username: userData.username,
+    email: userData.email,
+    displayName: userData.displayName,
+    groups: userData.groups || [],
+    isActive: userData.isActive,
+    createdAt: userData.createdAt,
+    lastLoginAt: userData.lastLoginAt,
+  })
+}
+
+/**
+ * Parse GroupData from EntitySnapshot
+ */
+export function parseGroupFromSnapshot(snapshot: EntitySnapshot): GroupData | null {
+  try {
+    const data = JSON.parse(snapshot.snapshotData)
+    return {
+      groupId: data.groupId || snapshot.entityId,
+      groupName: data.groupName || data.groupId || snapshot.entityId,
+      description: data.description,
+      roles: data.roles || [],
+      isActive: data.isActive !== false, // Default to true
+      createdAt: data.createdAt || snapshot.createdAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Format GroupData to JSON string for snapshotData
+ */
+export function formatGroupToSnapshotData(groupData: GroupData): string {
+  return JSON.stringify({
+    groupId: groupData.groupId,
+    groupName: groupData.groupName,
+    description: groupData.description,
+    roles: groupData.roles || [],
+    isActive: groupData.isActive,
+    createdAt: groupData.createdAt,
+  })
+}
+
+/**
+ * Parse PolicyData from EntitySnapshot
+ */
+export function parsePolicyFromSnapshot(snapshot: EntitySnapshot): PolicyData | null {
+  try {
+    const data = JSON.parse(snapshot.snapshotData)
+    return {
+      policyId: data.policyId || snapshot.entityId,
+      policyName: data.policyName || data.policyId || snapshot.entityId,
+      description: data.description,
+      rules: data.rules || {},
+      isActive: data.isActive !== false, // Default to true
+      createdAt: data.createdAt || snapshot.createdAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Format PolicyData to JSON string for snapshotData
+ */
+export function formatPolicyToSnapshotData(policyData: PolicyData): string {
+  return JSON.stringify({
+    policyId: policyData.policyId,
+    policyName: policyData.policyName,
+    description: policyData.description,
+    rules: policyData.rules,
+    isActive: policyData.isActive,
+    createdAt: policyData.createdAt,
+  })
+}
+
+/**
+ * Convert EntityInstance to UserData (for table display)
+ */
+export function entityToUser(entity: EntityInstance): Partial<UserData> {
+  return {
+    userId: entity.slug, // slug is the userId
+    createdAt: entity.createdAt,
+  }
+}
+
+/**
+ * Convert EntityInstance to GroupData (for table display)
+ */
+export function entityToGroup(entity: EntityInstance): Partial<GroupData> {
+  return {
+    groupId: entity.slug, // slug is the groupId
+    createdAt: entity.createdAt,
+  }
+}
+
+/**
+ * Convert EntityInstance to PolicyData (for table display)
+ */
+export function entityToPolicy(entity: EntityInstance): Partial<PolicyData> {
+  return {
+    policyId: entity.slug, // slug is the policyId
+    createdAt: entity.createdAt,
+  }
+}
+
