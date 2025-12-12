@@ -3,7 +3,7 @@ import { Layout, Menu, Select, Input, Button, Space, theme, Typography, Badge } 
 const { Search: SearchInput } = Input
 import type { MenuProps } from 'antd'
 import SplitPane from 'react-split-pane'
-import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User, GitCompare } from 'lucide-react'
+import { Database, Code, FileCode, Box, Users, ShoppingCart, Settings, GitBranch, Copy, CheckCircle2, Settings as SettingsIcon, GitMerge, Search, FileText, Server, FileJson, ShieldCheck, Shield, User, GitCompare, Building2, HardDrive } from 'lucide-react'
 import { EntityManager } from './EntityManager'
 import { SnapshotEditor } from './SnapshotEditor'
 import { ThemeSelector } from './ThemeSelector'
@@ -16,8 +16,11 @@ import { SchemaManager } from './SchemaManager'
 import { ApprovalManager } from './ApprovalManager'
 import { IdentityManager } from './IdentityManager'
 import { BranchStatusViewer } from './BranchStatusViewer'
+import { CacheManager } from './CacheManager'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
+import { useAppSelector, useAppDispatch } from '../store/hooks'
+import { setTenantId } from '../store/tenantSlice'
 import { message } from 'antd'
 import { buildUbosUri, parseUbosUri } from '../utils/useUbosUri'
 import './UbosStudioLayout.css'
@@ -67,7 +70,14 @@ export function UbosStudioLayout({
   const [mergeModalOpen, setMergeModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus'>('entities')
+  const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus' | 'cache'>('entities')
+  
+  // Tenant/Group selector state from Redux
+  const tenantId = useAppSelector((state) => state.tenant.tenantId)
+  const dispatch = useAppDispatch()
+  
+  // Mock tenant/group options
+  const tenantOptions = ['Tenant_A', 'Tenant_B', 'Global']
   
   const [triggerSearch, { data: searchResults = [], isLoading: isSearching }] = useLazySearchQuery()
 
@@ -111,6 +121,15 @@ export function UbosStudioLayout({
       setSelectedEntityType(undefined)
     } else if (e.key === 'approvals') {
       setActiveView('approvals')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'identity') {
+      setActiveView('identity')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'branchStatus') {
+      setActiveView('branchStatus')
+      setSelectedEntityType(undefined)
+    } else if (e.key === 'cache') {
+      setActiveView('cache')
       setSelectedEntityType(undefined)
     } else if (e.key === 'all') {
       setActiveView('entities')
@@ -164,12 +183,12 @@ export function UbosStudioLayout({
     try {
       // Parse URI to extract slug and branch for batchCommit
       const uriDetails = parseUbosUri(activeResourceUri)
-      if (!uriDetails) {
+      if (!uriDetails || !uriDetails.slug) {
         message.error('Invalid URI format')
         return
       }
 
-      const targetBranch = uriDetails.branch || currentBranch
+      const targetBranch: string = uriDetails.branch ?? currentBranch
 
       // Check if branch is protected
       if (isProtectedBranch(targetBranch)) {
@@ -338,6 +357,18 @@ export function UbosStudioLayout({
           </span>
         ),
       },
+      {
+        type: 'divider' as const,
+      },
+      {
+        key: 'cache',
+        icon: <HardDrive size={18} />,
+        label: (
+          <span style={{ fontWeight: activeView === 'cache' ? 500 : 400 }}>
+            Cache Management
+          </span>
+        ),
+      },
     ],
     [entityTypes, selectedEntityType, activeView]
   )
@@ -397,6 +428,27 @@ export function UbosStudioLayout({
         </div>
         <Space size="middle">
           <ThemeSelector />
+          <Space size="small">
+            <Building2 size={16} color={colorTextSecondary} />
+            <Text style={{ color: colorTextSecondary, fontSize: '13px' }}>Tenant:</Text>
+          </Space>
+          <Select
+            value={tenantId ?? 'Tenant_A'}
+            onChange={(value) => dispatch(setTenantId(value))}
+            style={{ 
+              width: 140,
+              fontWeight: 500,
+            }}
+            options={tenantOptions.map((t) => ({ 
+              label: (
+                <Space>
+                  <Building2 size={14} />
+                  <span>{t}</span>
+                </Space>
+              ), 
+              value: t 
+            }))}
+          />
           <Space size="small">
             <GitBranch size={16} color={colorTextSecondary} />
             <Text style={{ color: colorTextSecondary, fontSize: '13px' }}>Branch:</Text>
@@ -483,7 +535,7 @@ export function UbosStudioLayout({
                 letterSpacing: '0.5px',
               }}
             >
-              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' || activeView === 'branchStatus' ? 'Navigation' : 'Entity Types'}
+              {activeView === 'processLog' || activeView === 'environments' || activeView === 'schema' || activeView === 'approvals' || activeView === 'identity' || activeView === 'branchStatus' || activeView === 'cache' ? 'Navigation' : 'Entity Types'}
             </Text>
           </div>
           <Menu
@@ -497,6 +549,12 @@ export function UbosStudioLayout({
                 ? ['schema']
                 : activeView === 'approvals'
                 ? ['approvals']
+                : activeView === 'identity'
+                ? ['identity']
+                : activeView === 'branchStatus'
+                ? ['branchStatus']
+                : activeView === 'cache'
+                ? ['cache']
                 : selectedEntityType
                 ? [selectedEntityType]
                 : ['all']
@@ -538,6 +596,8 @@ export function UbosStudioLayout({
                 setActiveView('entities')
               }}
             />
+          ) : activeView === 'cache' ? (
+            <CacheManager currentBranch={currentBranch} />
           ) : (
           <SplitPane
             split="vertical"

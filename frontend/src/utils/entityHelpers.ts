@@ -237,7 +237,7 @@ export function entityToApprovalRequest(entity: EntityInstance): Partial<Approva
 // User entity structure (entityType='USER')
 export interface UserData {
   userId: string // The slug of the USER entity
-  username: string // User's login name
+  slug: string // User's login name (same as slug)
   email?: string // User's email address
   displayName?: string // User's display name
   groups?: string[] // Array of group slugs the user belongs to
@@ -274,7 +274,7 @@ export function parseUserFromSnapshot(snapshot: EntitySnapshot): UserData | null
     const data = JSON.parse(snapshot.snapshotData)
     return {
       userId: data.userId || snapshot.entityId,
-      username: data.username || data.userId || snapshot.entityId,
+      slug: data.slug || data.username || data.userId || snapshot.entityId,
       email: data.email,
       displayName: data.displayName,
       groups: data.groups || [],
@@ -293,7 +293,7 @@ export function parseUserFromSnapshot(snapshot: EntitySnapshot): UserData | null
 export function formatUserToSnapshotData(userData: UserData): string {
   return JSON.stringify({
     userId: userData.userId,
-    username: userData.username,
+    slug: userData.slug,
     email: userData.email,
     displayName: userData.displayName,
     groups: userData.groups || [],

@@ -36,6 +36,8 @@ import type {
   BranchStatusParams,
   BranchStatusResponse,
   EntityStatus,
+  CacheStatsResponse,
+  EvictCacheResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -49,6 +51,15 @@ export const ubosApi = createApi({
     // Vite proxy forwards /api/* to http://localhost:8080/api/*
     baseUrl: '/api/console',
     // No Authorization headers - backend uses IP whitelisting
+    prepareHeaders: (headers, { getState }) => {
+      // Get tenantId from Redux state
+      const state = getState() as any
+      const tenantId = state?.tenant?.tenantId
+      if (tenantId) {
+        headers.set('X-Tenant-ID', tenantId)
+      }
+      return headers
+    },
   }),
   tagTypes: ['Entity', 'Snapshot', 'History', 'Branch', 'Search', 'Process', 'Environment', 'Schema', 'Approval'],
   endpoints: (builder) => ({
@@ -456,6 +467,85 @@ export const ubosApi = createApi({
         ]
       },
     }),
+
+    // GET /admin/cache/stats
+    getCacheStats: builder.query<CacheStatsResponse, void>({
+      query: () => ({
+        url: 'admin/cache/stats',
+      }),
+      // Cache stats don't need tags - they're not part of the main data flow
+    }),
+
+    // POST /admin/cache/evict-all
+    evictAllCache: builder.mutation<EvictCacheResponse, void>({
+      query: () => ({
+        url: 'admin/cache/evict-all',
+        method: 'POST',
+      }),
+      invalidatesTags: () => {
+        // Invalidate all cache tags to force refetch
+        return [
+          { type: 'Entity', id: 'LIST' },
+          { type: 'Snapshot', id: 'LIST' },
+          { type: 'History', id: 'LIST' },
+          { type: 'Branch', id: 'LIST' },
+          { type: 'Search', id: 'LIST' },
+          { type: 'Process', id: 'LIST' },
+          { type: 'Environment', id: 'LIST' },
+          { type: 'Schema', id: 'LIST' },
+          { type: 'Approval', id: 'LIST' },
+        ]
+      },
+    }),
+
+    // POST /entity/rename
+    renameEntity: builder.mutation<RenameEntityResponse, RenameEntityRequest>({
+      query: (body) => ({
+        url: 'entity/rename',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        return [{ type: 'Entity', id: 'LIST' }]
+      },
+    }),
+
+    // POST /entity/copy
+    copyEntity: builder.mutation<CopyEntityResponse, CopyEntityRequest>({
+      query: (body) => ({
+        url: 'entity/copy',
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        return [{ type: 'Entity', id: 'LIST' }]
+      },
+    }),
+
+    // GET /status/diff
+    getBranchStatus: builder.query<BranchStatusResponse, BranchStatusParams>({
+      query: (params) => {
+        const searchParams = new URLSearchParams()
+        searchParams.append('baseBranch', params.baseBranch)
+        searchParams.append('currentBranch', params.currentBranch)
+        if (params.type) {
+          searchParams.append('type', params.type)
+        }
+        return {
+          url: 'status/diff',
+          params: searchParams,
+        }
+      },
+      providesTags: (_result, _error, arg) => [
+        { type: 'Entity', id: `STATUS-${arg.baseBranch}-${arg.currentBranch}` },
+      ],
+    }),
   }),
 })
 
@@ -484,5 +574,7 @@ export const {
   useRenameEntityMutation,
   useCopyEntityMutation,
   useGetBranchStatusQuery,
+  useGetCacheStatsQuery,
+  useEvictAllCacheMutation,
 } = ubosApi
 

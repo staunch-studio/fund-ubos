@@ -70,6 +70,7 @@ export interface CopyEntityResponse {
 export interface BranchStatusParams {
   baseBranch: string; // Base branch (e.g., "master")
   currentBranch: string; // Current branch to compare
+  type?: string; // Optional: filter by entity type
 }
 
 export interface EntityStatus {
@@ -199,6 +200,8 @@ export interface SearchRequest {
   query: string; // Required: search query string
   branch?: string; // Optional: filter by branch
   type?: string; // Optional: filter by entity type
+  mode?: string; // Optional: search mode
+  limit?: number; // Optional: limit number of results
 }
 
 export interface SearchResult {
@@ -338,3 +341,15 @@ export interface ApprovalRequestDetail {
 // Legacy alias for backward compatibility
 export interface ApproveRequest extends ApprovalActionRequest {}
 export interface ApproveRequestResponse extends ApprovalActionResponse {}
+
+// Cache Management types
+export interface CacheStatsResponse {
+  snapshotCacheSize: number; // Number of cached snapshot items
+  totalCacheSize?: number; // Total cache size (if available)
+}
+
+export interface EvictCacheResponse {
+  success: boolean;
+  message: string;
+  evictedCount?: number; // Number of items evicted (if available)
+}

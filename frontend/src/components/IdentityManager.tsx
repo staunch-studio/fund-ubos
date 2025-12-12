@@ -45,7 +45,7 @@ function UserRow({ entity, currentBranch, onEdit }: {
 
   const data: UserData = userData || {
     userId: entity.slug,
-    username: entity.slug,
+    slug: entity.slug,
     groups: [],
     isActive: true,
     createdAt: partial.createdAt || entity.createdAt,
@@ -68,7 +68,7 @@ function UserRow({ entity, currentBranch, onEdit }: {
   return (
     <tr>
       <td>
-        <Text style={{ fontWeight: 500, color: colorText }}>{data.username}</Text>
+        <Text style={{ fontWeight: 500, color: colorText }}>{entity.slug}</Text>
       </td>
       <td>
         <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>{data.email || '-'}</Text>
@@ -266,7 +266,7 @@ export function IdentityManager({ currentBranch }: IdentityManagerProps) {
         slugs: [editingUser.entity.slug],
         branch: currentBranch,
         jsonPatch,
-        message: `Update user ${editingUser.data.username} groups`,
+        message: `Update user ${editingUser.data.slug} groups`,
       }).unwrap()
 
       message.success('User groups updated successfully')
@@ -371,8 +371,12 @@ export function IdentityManager({ currentBranch }: IdentityManagerProps) {
   const userColumns: ColumnsType<EntityInstance> = [
     {
       title: 'Username',
-      key: 'username',
+      dataIndex: 'slug',
+      key: 'slug',
       width: 200,
+      render: (slug: string) => (
+        <Text style={{ fontWeight: 500, color: colorText }}>{slug}</Text>
+      ),
     },
     {
       title: 'Email',
@@ -603,7 +607,7 @@ export function IdentityManager({ currentBranch }: IdentityManagerProps) {
         {editingUser && (
           <div>
             <div style={{ marginBottom: '16px' }}>
-              <Text strong>User: {editingUser.data.username}</Text>
+              <Text strong>User: {editingUser.data.slug}</Text>
             </div>
             <Select
               mode="multiple"
