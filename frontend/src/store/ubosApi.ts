@@ -44,6 +44,8 @@ import type {
   CacheMetricsResponse,
   ResolveConflictRequest,
   ResolveConflictResponse,
+  ApplyDraftRequest,
+  ApplyDraftResponse,
 } from '../types/ubos'
 
 export const ubosApi = createApi({
@@ -608,6 +610,33 @@ export const ubosApi = createApi({
         ]
       },
     }),
+
+    // POST /draft/apply
+    applyDraft: builder.mutation<ApplyDraftResponse, ApplyDraftRequest>({
+      query: (body) => ({
+        url: 'draft/apply',
+        method: 'POST',
+        body: {
+          draftBranch: body.draftBranch,
+          targetBranch: body.targetBranch,
+          slug: body.slug,
+          type: body.type,
+          message: body.message || 'Apply draft',
+          author: body.author || 'system',
+        },
+      }),
+      invalidatesTags: (_result, error) => {
+        if (error) {
+          return []
+        }
+        // Invalidate all caches after applying draft
+        return [
+          { type: 'Entity', id: 'LIST' },
+          { type: 'Snapshot', id: 'LIST' },
+          { type: 'Branch', id: 'LIST' },
+        ]
+      },
+    }),
   }),
 })
 
@@ -643,5 +672,6 @@ export const {
   useGetCommitsMetricsQuery,
   useGetCacheMetricsQuery,
   useResolveConflictMutation,
+  useApplyDraftMutation,
 } = ubosApi
 

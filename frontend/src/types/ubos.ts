@@ -419,3 +419,27 @@ export interface ResolveConflictResponse {
   commitId?: number;
   message?: string;
 }
+
+// Draft management types
+export interface DraftInfo {
+  branchName: string;
+  entityId: string;
+  userId: string;
+  lastModified?: string; // ISO timestamp
+  commitId?: number;
+}
+
+export interface ApplyDraftRequest {
+  draftBranch: string;
+  targetBranch: string;
+  slug: string;
+  type: string;
+  message?: string;
+  author?: string;
+}
+
+export interface ApplyDraftResponse {
+  success: boolean;
+  mergeCommitId?: number;
+  message?: string;
+}

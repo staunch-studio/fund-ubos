@@ -1175,4 +1175,52 @@ public class LcmKernelService
     public int getSnapshotCacheSize() {
         return snapshotCache.size();
     }
+
+    /**
+     * Commit WITHOUT schema validation (for user draft branches / stash).
+     * This must never be used for "real" branches like main/master.
+     */
+    @Transactional
+    public Mono<Long> commitWithoutValidation(String type, String slug, String branch,
+        String jsonContent, String author, String msg) {
+        if (type == null || type.isBlank()) {
+            return Mono.error(new IllegalArgumentException("type is required"));
+        }
+        if (slug == null || slug.isBlank()) {
+            return Mono.error(new IllegalArgumentException("slug is required"));
+        }
+        if (branch == null || branch.isBlank()) {
+            return Mono.error(new IllegalArgumentException("branch is required"));
+        }
+        if (jsonContent == null) {
+            return Mono.error(new IllegalArgumentException("jsonContent is required"));
+        }
+
+        return entityRepo.findByEntityTypeAndSlug(type, slug)
+            .switchIfEmpty(createEntity(type, slug))
+            .flatMap(entity ->
+                versionRepo.findHeadSnapshot(entity.getId(), branch)
+                    .map(LcmEntityVersionChain::getCommitId)
+                    .defaultIfEmpty(0L)
+                    .flatMap(parentId -> {
+                        Long actualParentId = (parentId == 0L) ? null : parentId;
+
+                        LcmEntityVersionChain newCommit = LcmEntityVersionChain.builder()
+                            .entityId(entity.getId())
+                            .branchName(branch)
+                            .parentCommitId(actualParentId)
+                            .snapshotData(jsonContent)
+                            .authorId(author)
+                            .message(msg)
+                            .committedAt(LocalDateTime.now())
+                            .build();
+
+                        return versionRepo.save(newCommit).retryWhen(retryPolicy);
+                    })
+                    .flatMap(savedCommit ->
+                        updateBranchHead(entity.getId(), branch, savedCommit.getCommitId())
+                            .thenReturn(savedCommit.getCommitId())
+                    )
+            );
+    }
 }

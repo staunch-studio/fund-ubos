@@ -18,6 +18,7 @@ import { IdentityManager } from './IdentityManager'
 import { BranchStatusViewer } from './BranchStatusViewer'
 import { CacheManager } from './CacheManager'
 import { OperationalDashboard } from './OperationalDashboard'
+import { useDraftManager, DraftModeBadge, ApplyDraftButton } from './DraftManager'
 import type { EntityInstance } from '../types/ubos'
 import { useBatchCommitMutation, useGetBranchesQuery, useLazySearchQuery, useCreateApprovalRequestMutation } from '../store/ubosApi'
 import { useAppSelector, useAppDispatch } from '../store/hooks'
@@ -72,6 +73,7 @@ export function UbosStudioLayout({
   const [searchQuery, setSearchQuery] = useState('')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
   const [activeView, setActiveView] = useState<'entities' | 'processLog' | 'environments' | 'schema' | 'approvals' | 'identity' | 'branchStatus' | 'cache' | 'dashboard'>('entities')
+  const [currentEntity, setCurrentEntity] = useState<EntityInstance | null>(null)
   
   // Tenant/Group selector state from Redux
   const tenantId = useAppSelector((state) => state.tenant.tenantId)
@@ -192,10 +194,16 @@ export function UbosStudioLayout({
         return
       }
 
-      const targetBranch: string = uriDetails.branch ?? currentBranch
+      // In draft mode, always commit to draft branch
+      let targetBranch: string = uriDetails.branch ?? currentBranch
+      
+      // If in draft mode, use draft branch instead
+      if (draftManager.isDraftMode && draftManager.draftBranch) {
+        targetBranch = draftManager.draftBranch
+      }
 
-      // Check if branch is protected
-      if (isProtectedBranch(targetBranch)) {
+      // Check if branch is protected (but allow draft branches)
+      if (isProtectedBranch(targetBranch) && !draftManager.isDraftMode) {
         // Create approval request instead of direct commit
         // Backend expects: { targetUri, content: Map<String, Object>, author?, message? }
         const approvalResponse = await createApprovalRequest({
@@ -261,6 +269,37 @@ export function UbosStudioLayout({
       [uri]: data,
     }))
   }
+
+  // Draft management
+  const uriDetails = activeResourceUri ? parseUbosUri(activeResourceUri) : null
+  const draftManager = useDraftManager({
+    entity: currentEntity,
+    entityId: uriDetails?.slug || currentEntity?.slug || '',
+    currentBranch: currentBranch,
+    editedSnapshotData: activeResourceUri ? editedSnapshotData[activeResourceUri] : null,
+    onDraftBranchChange: (branch) => {
+      if (branch && uriDetails && uriDetails.slug && uriDetails.type) {
+        // Update URI to use draft branch
+        const draftUri = buildUbosUri(uriDetails.type, uriDetails.slug, branch)
+        setActiveResourceUri(draftUri)
+      } else if (!branch && uriDetails && uriDetails.slug && uriDetails.type) {
+        // Restore original branch
+        const originalUri = buildUbosUri(uriDetails.type, uriDetails.slug, currentBranch)
+        setActiveResourceUri(originalUri)
+      }
+    },
+    onApplyDraft: () => {
+      // Clear edited data after applying draft
+      if (activeResourceUri) {
+        setEditedSnapshotData((prev) => {
+          const updated = { ...prev }
+          delete updated[activeResourceUri]
+          return updated
+        })
+        setCommitMessage('')
+      }
+    },
+  })
 
   const handleCopyUri = () => {
     if (currentUri) {
@@ -640,8 +679,10 @@ export function UbosStudioLayout({
                             if (entity) {
                               const uri = buildUbosUri(entity.entityType, entity.slug, currentBranch)
                               setActiveResourceUri(uri)
+                              setCurrentEntity(entity)
                             } else {
                               setActiveResourceUri(null)
+                              setCurrentEntity(null)
                             }
                           }}
                           currentBranch={currentBranch}
@@ -714,7 +755,10 @@ export function UbosStudioLayout({
                       </Button>
                     }
                   />
-                  {hasChanges && (
+                  {draftManager.isDraftMode && (
+                    <DraftModeBadge />
+                  )}
+                  {hasChanges && !draftManager.isDraftMode && (
                     <Badge
                       status="processing"
                       text={
@@ -772,21 +816,31 @@ export function UbosStudioLayout({
                     <Text style={{ color: colorTextSecondary, fontSize: '12px' }}>💬</Text>
                   }
                 />
-                <Button
-                  type="primary"
-                  onClick={handleCommit}
-                  loading={isCommitting}
-                  disabled={!activeResourceUri || !hasChanges}
-                  style={{
-                    minWidth: 140,
-                    height: 36,
-                    fontWeight: 500,
-                    boxShadow: hasChanges ? `0 2px 8px rgba(74, 158, 255, 0.3)` : 'none',
-                  }}
-                  icon={<CheckCircle2 size={16} />}
-                >
-                  {isCommitting ? 'Committing...' : 'Commit Changes'}
-                </Button>
+                {draftManager.isDraftMode ? (
+                  <ApplyDraftButton
+                    onClick={draftManager.handleApplyDraft}
+                    loading={draftManager.isApplyingDraft}
+                    disabled={!activeResourceUri || !hasChanges}
+                  />
+                ) : (
+                  <Button
+                    type="primary"
+                    onClick={handleCommit}
+                    loading={isCommitting || draftManager.isAutoSaving}
+                    disabled={!activeResourceUri || !hasChanges}
+                    style={{
+                      minWidth: 140,
+                      height: 36,
+                      fontWeight: 500,
+                      boxShadow: hasChanges ? `0 2px 8px rgba(74, 158, 255, 0.3)` : 'none',
+                    }}
+                    icon={<CheckCircle2 size={16} />}
+                  >
+                    {isCommitting || draftManager.isAutoSaving
+                      ? 'Saving...'
+                      : 'Commit Changes'}
+                  </Button>
+                )}
               </div>
             </div>
           </SplitPane>
